@@ -1,0 +1,216 @@
+# AgentPath AI - retrieval benchmark query set
+#
+# FICTIONAL — SYNTHETIC DEMO DATA. Every expectation points at an invented
+# Northwind Travel procedure.
+#
+# Two kinds of query live here and they are scored separately:
+#
+#   supported    - a procedure in the knowledge base answers it.
+#                  Scored with Recall@1, Recall@3 and MRR.
+#   unsupported  - nothing in the knowledge base answers it.
+#                  Scored only on whether the system abstained.
+#
+# Mixing the two into one accuracy number would hide the behaviour that matters
+# most: refusing to answer is correct for one group and a failure for the other.
+#
+# `type` records what the query stresses, so the report can show where hybrid
+# retrieval earns its keep rather than only that it does.
+
+version: "1.0"
+
+queries:
+  # -- exact or near-exact official wording --------------------------------- #
+  - id: q001
+    query: Property unable to accommodate a confirmed guest
+    type: exact_title
+    language: en
+    expected: [NW-HTL-014]
+
+  - id: q002
+    query: Property cannot locate a booking that Northwind Travel shows as confirmed
+    type: exact_title
+    language: en
+    expected: [NW-HTL-021]
+
+  - id: q003
+    query: Cancellation request for a non-refundable booking
+    type: exact_title
+    language: en
+    expected: [NW-CXL-032]
+
+  - id: q004
+    query: Approved refund has not arrived within the expected window
+    type: exact_title
+    language: en
+    expected: [NW-REF-018]
+
+  - id: q005
+    query: Duplicate booking for the same guest and the same dates
+    type: exact_title
+    language: en
+    expected: [NW-CXL-045]
+
+  # -- how agents actually phrase it ---------------------------------------- #
+  - id: q006
+    query: hotel has no room for the guest
+    type: synonym
+    language: en
+    expected: [NW-HTL-014]
+
+  - id: q007
+    query: the property overbooked and walked our guest
+    type: synonym
+    language: en
+    expected: [NW-HTL-014]
+
+  - id: q008
+    query: hotel says there is no reservation under that name
+    type: synonym
+    language: en
+    expected: [NW-HTL-021]
+
+  - id: q009
+    query: customer was charged twice for the same stay
+    type: synonym
+    language: en
+    expected: [NW-CXL-045]
+
+  - id: q010
+    query: where is my refund, it never arrived
+    type: synonym
+    language: en
+    expected: [NW-REF-018]
+
+  - id: q011
+    query: customer wants to cancel a prepaid rate with no refund allowed
+    type: synonym
+    language: en
+    expected: [NW-CXL-032]
+
+  # -- Arabic queries against English procedures ---------------------------- #
+  - id: q012
+    query: الفندق ما عنده غرف والضيف واصل
+    type: arabic
+    language: ar
+    expected: [NW-HTL-014]
+
+  - id: q013
+    query: الفندق ما لاقى الحجز
+    type: arabic
+    language: ar
+    expected: [NW-HTL-021]
+
+  - id: q014
+    query: الاسترداد متأخر وما وصلني المبلغ
+    type: arabic
+    language: ar
+    expected: [NW-REF-018]
+
+  - id: q015
+    query: في حجزين لنفس الضيف ونفس التواريخ
+    type: arabic
+    language: ar
+    expected: [NW-CXL-045]
+
+  - id: q016
+    query: العميل بدو يلغي حجز غير قابل للاستراد
+    type: arabic
+    language: ar
+    expected: [NW-CXL-032]
+
+  - id: q017
+    query: الضيف واقف بالاستقبال والفندق رفض تسجيل الوصول
+    type: arabic
+    language: ar
+    expected: [NW-HTL-014]
+
+  # -- mixed Arabic and English, as agents type under pressure -------------- #
+  - id: q018
+    query: overbooking بالفندق والضيف موجود
+    type: mixed
+    language: mixed
+    expected: [NW-HTL-014]
+
+  # -- misspellings --------------------------------------------------------- #
+  - id: q019
+    query: overboking at the hotle
+    type: typo
+    language: en
+    expected: [NW-HTL-014]
+
+  - id: q020
+    query: dupliacte bookign for same guset
+    type: typo
+    language: en
+    expected: [NW-CXL-045]
+
+  - id: q021
+    query: refnud is late and cancelation was approved
+    type: typo
+    language: en
+    expected: [NW-REF-018]
+
+  # -- agent shorthand ------------------------------------------------------ #
+  - id: q022
+    query: nonref cxl request
+    type: abbreviation
+    language: en
+    expected: [NW-CXL-032]
+
+  - id: q023
+    query: dup bkg same dates
+    type: abbreviation
+    language: en
+    expected: [NW-CXL-045]
+
+  # -- vague, but still answerable ------------------------------------------ #
+  - id: q024
+    query: guest is at reception and there is a problem with the room
+    type: vague
+    language: en
+    expected: [NW-HTL-014, NW-HTL-021]
+
+  - id: q025
+    query: customer is asking about money that should have come back
+    type: vague
+    language: en
+    expected: [NW-REF-018]
+
+  # -- searching by reference ----------------------------------------------- #
+  - id: q026
+    query: NW-HTL-014
+    type: procedure_id
+    language: en
+    expected: [NW-HTL-014]
+
+  # -- nothing in the knowledge base answers these -------------------------- #
+  - id: q027
+    query: how do I reset my email password
+    type: unsupported
+    language: en
+    expected: []
+    expect_abstain: true
+
+  - id: q028
+    query: what is the office wifi password
+    type: unsupported
+    language: en
+    expected: []
+    expect_abstain: true
+
+  - id: q029
+    query: كيف أقدم طلب إجازة سنوية
+    type: unsupported
+    language: ar
+    expected: []
+    expect_abstain: true
+
+  - id: q030
+    query: passenger name correction on a flight ticket
+    type: unsupported
+    language: en
+    expected: []
+    expect_abstain: true
+    # Deliberate near-miss: this is a real customer-service scenario and a
+    # plausible product line, but no such procedure exists in this five-procedure
+    # slice. A system that answers it anyway is inventing policy.

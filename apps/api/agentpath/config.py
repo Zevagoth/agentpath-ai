@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     vector_similarity_weight: float = Field(
         default=0.6, ge=0.0, le=1.0, validation_alias="RAGFLOW_VECTOR_SIMILARITY_WEIGHT"
     )
+    # Engine-side floor: chunks below this are not returned at all. Kept low so
+    # the abstention decision is made by our own graded thresholds below, where it
+    # can be explained to the agent, rather than silently by the engine.
     similarity_threshold: float = Field(
         default=0.15, ge=0.0, le=1.0, validation_alias="RAGFLOW_SIMILARITY_THRESHOLD"
     )
@@ -97,11 +100,36 @@ class Settings(BaseSettings):
     top_procedures: int = Field(default=3, ge=1, le=10, validation_alias="AGENTPATH_TOP_PROCEDURES")
     lexicon_file: Path = Field(default_factory=lexicon_path, validation_alias="AGENTPATH_LEXICON_PATH")
 
-    # Evidence thresholds, tuned against evaluation/queries.yaml. See
-    # EVALUATION.md for the measurements behind these numbers.
-    evidence_strong_score: float = Field(default=0.45, validation_alias="AGENTPATH_EVIDENCE_STRONG_SCORE")
+    # Evidence thresholds.
+    #
+    # Derived from the observed score distribution on the 30-query benchmark set
+    # (see EVALUATION.md for the numbers and the caveats):
+    #   - lowest-scoring supported query   0.526
+    #   - highest-scoring unsupported query 0.493
+    # so 0.51 sits in the 0.034-wide gap between "answerable" and "not in the
+    # knowledge base". That gap is thin, and it was measured on the same set the
+    # report quotes, which is a real methodological weakness: it must be re-derived
+    # on a held-out split once the corpus grows past five procedures.
+    #
+    # Attempts that did *not* separate the two populations, recorded so they are
+    # not retried blindly: lexical (BM25) score - a vague but answerable query
+    # scored 0.085 against 0.083 for an unanswerable one; and lexicon concept
+    # matches - genuine vague queries and reference-number lookups match no
+    # concept either.
+    evidence_strong_score: float = Field(default=0.60, validation_alias="AGENTPATH_EVIDENCE_STRONG_SCORE")
     evidence_strong_margin: float = Field(default=0.05, validation_alias="AGENTPATH_EVIDENCE_STRONG_MARGIN")
-    evidence_partial_score: float = Field(default=0.28, validation_alias="AGENTPATH_EVIDENCE_PARTIAL_SCORE")
+    evidence_partial_score: float = Field(default=0.51, validation_alias="AGENTPATH_EVIDENCE_PARTIAL_SCORE")
+
+    @field_validator("evidence_strong_score")
+    @classmethod
+    def _tiers_are_ordered(cls, value: float, info) -> float:
+        """A strong threshold below the partial threshold would be meaningless."""
+        partial = info.data.get("evidence_partial_score")
+        if partial is not None and value < partial:
+            raise ValueError(
+                f"evidence_strong_score ({value}) must be at least evidence_partial_score ({partial})"
+            )
+        return value
 
     @field_validator("ragflow_base_url", "ollama_host_url", "reranker_url", "embedder_url")
     @classmethod

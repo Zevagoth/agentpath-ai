@@ -41,6 +41,7 @@ version = "0.1.0"
 source = { editable = "evaluation" }
 dependencies = [
     { name = "agentpath" },
+    { name = "agentpath-ingestion" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -49,6 +50,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agentpath", editable = "apps/api" },
+    { name = "agentpath-ingestion", editable = "services/ingestion" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pyyaml", specifier = ">=6.0" },
