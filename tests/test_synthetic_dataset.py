@@ -341,6 +341,8 @@ def test_metadata_is_stringified_for_ragflow_filters(dataset: list[LoadedProcedu
     metadata = build_metadata(dataset[0].procedure)
     assert set(metadata) == {
         "procedure_id",
+        "title",
+        "title_ar",
         "product_line",
         "scenario_tags",
         "severity",

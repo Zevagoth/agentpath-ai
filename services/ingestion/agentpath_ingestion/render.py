@@ -216,6 +216,11 @@ def build_metadata(procedure: Procedure) -> dict[str, str]:
     """
     return {
         "procedure_id": procedure.procedure_id,
+        # The title travels in metadata so a retrieved chunk can be labelled
+        # without depending on which chunk happened to contain the H1 heading.
+        # Without it, cards fall back to the document filename.
+        "title": procedure.title,
+        "title_ar": procedure.title_ar,
         "product_line": procedure.product_line.value,
         "scenario_tags": ",".join(procedure.scenario_tags),
         "severity": procedure.severity.value,
