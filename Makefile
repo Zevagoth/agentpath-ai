@@ -1,0 +1,130 @@
+# AgentPath AI - developer entry points.
+#
+# Every target is safe to re-run. Nothing here deletes data or pushes to a remote.
+
+SHELL := /bin/bash
+.DEFAULT_GOAL := help
+
+WORKSPACE := $(CURDIR)
+RAGFLOW_DIR := $(WORKSPACE)/.external/ragflow/docker
+COMPOSE_OVERRIDE := $(WORKSPACE)/infra/ragflow/docker-compose.override.agentpath.yml
+ENV_LOCAL := $(WORKSPACE)/.env.local
+
+.PHONY: help
+help: ## Show this help
+	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
+
+# --------------------------------------------------------------------------- #
+# Environment
+# --------------------------------------------------------------------------- #
+
+.PHONY: check
+check: ## Verify the machine is ready (read-only; writes docs/ENVIRONMENT.md)
+	@python3 scripts/env_check.py --json docs/ENVIRONMENT.json --markdown docs/ENVIRONMENT.md
+
+.PHONY: install
+install: ## Create the Python workspace virtualenv (uv-managed CPython 3.12)
+	@uv sync --all-packages
+
+.PHONY: install-web
+install-web: ## Install web app dependencies
+	@cd apps/web && npm install
+
+# --------------------------------------------------------------------------- #
+# RAGFlow stack
+# --------------------------------------------------------------------------- #
+
+.PHONY: ragflow-bootstrap
+ragflow-bootstrap: ## Clone RAGFlow at the pinned tag and render docker/.env
+	@bash scripts/bootstrap_ragflow.sh
+
+.PHONY: ragflow-up
+ragflow-up: ## Start the RAGFlow stack plus the AgentPath reranker sidecar
+	@bash scripts/ragflow_compose.sh up -d
+
+.PHONY: ragflow-down
+ragflow-down: ## Stop the stack (volumes are preserved)
+	@bash scripts/ragflow_compose.sh down
+
+.PHONY: ragflow-logs
+ragflow-logs: ## Tail RAGFlow server logs
+	@bash scripts/ragflow_compose.sh logs -f ragflow
+
+.PHONY: ragflow-health
+ragflow-health: ## Report the health of every stack dependency
+	@bash scripts/ragflow_health.sh
+
+.PHONY: ollama-bridge
+ollama-bridge: ## Publish Ollama on the Docker bridge interface only (no LAN exposure)
+	@bash scripts/ollama_bridge.sh start
+
+.PHONY: models
+models: ## Pull bge-m3 and register the embedding + rerank models in RAGFlow
+	@bash scripts/pull_models.sh
+	@uv run python scripts/configure_ragflow_models.py
+
+.PHONY: models-verify
+models-verify: ## Prove the embedding and rerank paths work end to end
+	@uv run python scripts/configure_ragflow_models.py --verify-only
+
+# --------------------------------------------------------------------------- #
+# Data and retrieval
+# --------------------------------------------------------------------------- #
+
+.PHONY: dataset
+dataset: ## Render the synthetic procedures to Markdown
+	@uv run agentpath-ingest build
+
+.PHONY: ingest
+ingest: ## Ingest the rendered procedures into RAGFlow
+	@uv run agentpath-ingest ingest
+
+.PHONY: ingest-verify
+ingest-verify: ## Show ingestion status and chunk counts
+	@uv run agentpath-ingest verify
+
+.PHONY: api
+api: ## Run the FastAPI service on 127.0.0.1:8000
+	@uv run uvicorn agentpath.api.app:app --host 127.0.0.1 --port 8000 --reload
+
+.PHONY: web
+web: ## Run the Next.js dev server on 127.0.0.1:3000
+	@cd apps/web && npm run dev
+
+.PHONY: search
+search: ## One-off search from the CLI: make search Q="hotel has no room"
+	@uv run python -m agentpath.cli search "$(Q)"
+
+# --------------------------------------------------------------------------- #
+# Quality
+# --------------------------------------------------------------------------- #
+
+.PHONY: test
+test: ## Run backend unit tests (no live stack required)
+	@uv run pytest -m "not integration"
+
+.PHONY: test-integration
+test-integration: ## Run tests that require the live stack
+	@uv run pytest -m integration
+
+.PHONY: test-web
+test-web: ## Run web unit tests
+	@cd apps/web && npm run test
+
+.PHONY: test-e2e
+test-e2e: ## Run Playwright end-to-end tests
+	@cd apps/web && npm run test:e2e
+
+.PHONY: lint
+lint: ## Lint Python sources
+	@uv run ruff check .
+	@uv run ruff format --check .
+
+.PHONY: format
+format: ## Format Python sources
+	@uv run ruff format .
+
+.PHONY: eval
+eval: ## Run the baseline vs hybrid retrieval benchmark
+	@uv run agentpath-eval

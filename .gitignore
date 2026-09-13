@@ -1,0 +1,44 @@
+# --- secrets: never commit real values -------------------------------------
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets/
+
+# --- external checkouts (RAGFlow is cloned at a pinned tag, not vendored) ---
+.external/
+
+# --- python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# --- node / next ------------------------------------------------------------
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# --- generated artefacts ----------------------------------------------------
+data/synthetic/build/
+data/synthetic/screenshots/generated/
+evaluation/reports/*.json
+docs/ENVIRONMENT.json
+
+# --- local tooling ----------------------------------------------------------
+.idea/
+.vscode/
+*.log
+.DS_Store

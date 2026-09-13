@@ -1,0 +1,24 @@
+[project]
+name = "agentpath-eval"
+version = "0.1.0"
+description = "AgentPath AI - retrieval benchmark: lexical baseline vs hybrid retrieval"
+requires-python = ">=3.12"
+dependencies = [
+    "agentpath",
+    "httpx>=0.27",
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+agentpath-eval = "agentpath_eval.runner:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agentpath_eval"]
+
+[tool.uv.sources]
+agentpath = { workspace = true }
