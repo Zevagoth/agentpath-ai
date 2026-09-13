@@ -1,0 +1,302 @@
+# FICTIONAL — SYNTHETIC DEMO DATA
+#
+# Customer-service lexicon for AgentPath AI query understanding.
+#
+# This file is the deterministic half of query understanding. It runs before
+# retrieval and is intentionally auditable: when a query is expanded or tagged,
+# the reason is a line in this file rather than a model's guess.
+#
+# Sections:
+#   typos          - misspelling -> correction, applied to English tokens
+#   abbreviations  - agent shorthand -> full form
+#   concepts       - canonical concept with its Arabic and English surface forms,
+#                    the product lines it implies, and the scenario tags it sets
+#   product_lines  - additional standalone hints per product line
+#
+# Arabic entries are written naturally; the pipeline normalizes both the query
+# and these entries (diacritics, alef/ya/ta-marbuta) before comparing them.
+
+version: "1.0"
+
+typos:
+  overboking: overbooking
+  overbookign: overbooking
+  ovebooking: overbooking
+  cancelation: cancellation
+  cancellaton: cancellation
+  cancle: cancel
+  cancled: cancelled
+  refundd: refund
+  refnud: refund
+  reund: refund
+  bookign: booking
+  bookig: booking
+  bokking: booking
+  bookin: booking
+  hotell: hotel
+  hotle: hotel
+  guset: guest
+  duplicat: duplicate
+  duplicte: duplicate
+  dupliacte: duplicate
+  reservaton: reservation
+  reserevation: reservation
+  nonrefundable: non-refundable
+  nonerefundable: non-refundable
+  acommodate: accommodate
+  accomodate: accommodate
+  releocation: relocation
+  relocaton: relocation
+
+abbreviations:
+  nonref: non-refundable
+  "non ref": non-refundable
+  nr: non-refundable
+  cx: cancellation
+  cxl: cancellation
+  cnx: cancellation
+  ref: refund
+  rfnd: refund
+  res: reservation
+  resv: reservation
+  bkg: booking
+  ob: overbooking
+  dup: duplicate
+  pax: guest
+  ota: travel agency
+  eta: arrival time
+  asap: urgent
+
+concepts:
+  - id: overbooking
+    canonical: overbooking
+    product_lines: [hotels]
+    scenario_tags: [overbooking, property_unable_to_host, walked_guest]
+    en:
+      - overbooking
+      - overbooked
+      - no room available
+      - no rooms left
+      - hotel has no room
+      - hotel is full
+      - fully booked
+      - walked guest
+      - refused check in
+      - refused checkin
+      - turned the guest away
+      - cannot accommodate
+      - cannot host
+      - relocation
+      - relocate the guest
+      - move the guest to another hotel
+    ar:
+      - اوفربوكينج
+      - الفندق مباع بالكامل
+      - ما في غرف
+      - ما عنده غرف
+      - الفندق ممتلئ
+      - رفض تسجيل الوصول
+      - رفض استقبال الضيف
+      - ما بيقدر يستقبل
+      - نقل الضيف
+      - فندق بديل
+      - تحويل الضيف لفندق ثاني
+
+  - id: booking_not_found
+    canonical: booking not found at the property
+    product_lines: [hotels]
+    scenario_tags: [booking_not_found_at_property, supplier_record_mismatch]
+    en:
+      - cannot find the booking
+      - can not find the booking
+      - no record of the booking
+      - booking missing
+      - reservation not found
+      - no reservation
+      - booking is not in their system
+      - hotel does not have the reservation
+      - lost the booking
+    ar:
+      - ما لاقى الحجز
+      - ما لاقو الحجز
+      - لا يوجد حجز
+      - ما عندهم حجز
+      - الحجز مش موجود
+      - الحجز غير موجود بالنظام
+      - ضايع الحجز
+      - ما بيلاقي الحجز
+
+  - id: duplicate_booking
+    canonical: duplicate booking
+    product_lines: [cancellations]
+    scenario_tags: [duplicate_booking, double_charge]
+    en:
+      - duplicate booking
+      - duplicate reservation
+      - booked twice
+      - two bookings
+      - double booking
+      - same dates twice
+      - charged twice
+      - double charge
+      - two confirmation numbers
+    ar:
+      - حجز مكرر
+      - حجزين
+      - حجزت مرتين
+      - نفس الحجز مرتين
+      - انسحب المبلغ مرتين
+      - خصم مرتين
+      - تكرار الحجز
+
+  - id: non_refundable
+    canonical: non-refundable rate
+    product_lines: [cancellations, refunds]
+    scenario_tags: [non_refundable, cancellation_request, waiver_request]
+    en:
+      - non-refundable
+      - non refundable
+      - not refundable
+      - no refund allowed
+      - prepaid rate
+      - cancel without refund
+      - waiver
+      - exception request
+      - outside policy
+    ar:
+      - غير قابل للاستراد
+      - غير مسترد
+      - غير قابل للإلغاء
+      - مدفوع مقدما
+      - بدون استرداد
+      - استثناء
+      - طلب استثناء
+      - خارج الشروط
+
+  - id: cancellation_request
+    canonical: cancellation request
+    product_lines: [cancellations]
+    scenario_tags: [cancellation_request]
+    en:
+      - cancel the booking
+      - wants to cancel
+      - cancellation request
+      - cancel my reservation
+      - cancel the stay
+    ar:
+      - بدو يلغي
+      - يريد الإلغاء
+      - إلغاء الحجز
+      - طلب إلغاء
+      - بدي الغي حجزي
+
+  - id: delayed_refund
+    canonical: delayed refund
+    product_lines: [refunds]
+    scenario_tags: [delayed_refund, refund_not_received, payment_trace]
+    en:
+      - refund delayed
+      - refund not received
+      - refund is late
+      - where is my refund
+      - money not returned
+      - still waiting for the refund
+      - refund pending too long
+      - refund approved but not paid
+    ar:
+      - الاسترداد متاخر
+      - تاخر الاسترداد
+      - ما وصل المبلغ
+      - ما رجعت الفلوس
+      - وين المبلغ
+      - لسا ما استلمت المبلغ
+      - المبلغ ما رجع
+
+  - id: escalation
+    canonical: escalation
+    product_lines: [escalations]
+    scenario_tags: [escalation]
+    en:
+      - escalate
+      - supervisor
+      - manager approval
+      - tier 2
+      - urgent case
+      - approval required
+    ar:
+      - تصعيد
+      - رفع الحالة
+      - مشرف
+      - موافقة المدير
+      - حالة عاجلة
+
+  - id: guest_at_property
+    canonical: guest is at the property
+    product_lines: [hotels]
+    scenario_tags: [guest_at_property, time_critical]
+    en:
+      - guest is at the hotel
+      - guest at reception
+      - standing at the front desk
+      - already arrived
+      - guest is waiting at the property
+      - at check in now
+    ar:
+      - الضيف موجود بالفندق
+      - الضيف عند الاستقبال
+      - الضيف واصل
+      - الضيف واقف بالاستقبال
+      - الضيف مستني
+
+product_lines:
+  hotels:
+    - hotel
+    - property
+    - room
+    - check in
+    - checkin
+    - check-in
+    - front desk
+    - reception
+    - stay
+    - nights
+    - فندق
+    - غرفة
+    - استقبال
+    - اقامة
+    - ليالي
+  flights:
+    - flight
+    - airline
+    - schedule change
+    - name correction
+    - boarding
+    - ticket
+    - طيران
+    - رحلة
+    - تذكرة
+    - تعديل اسم
+  cancellations:
+    - cancel
+    - cancellation
+    - duplicate
+    - waiver
+    - الغاء
+    - مكرر
+    - استثناء
+  refunds:
+    - refund
+    - money back
+    - statement
+    - payment trace
+    - استرداد
+    - المبلغ
+    - كشف حساب
+  escalations:
+    - escalate
+    - supervisor
+    - approval
+    - tier 2
+    - تصعيد
+    - مشرف
+    - موافقة

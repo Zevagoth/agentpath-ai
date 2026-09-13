@@ -1,0 +1,187 @@
+# FICTIONAL — SYNTHETIC DEMO DATA
+# Invented procedure for the invented travel agency "Northwind Travel".
+procedure_id: NW-CXL-045
+title: Duplicate booking for the same guest and the same dates
+title_ar: حجز مكرر لنفس الضيف ونفس التواريخ
+product_line: cancellations
+scenario_tags:
+  - duplicate_booking
+  - double_charge
+  - booked_twice
+severity: routine
+
+summary:
+  en: >-
+    Use when two or more bookings exist for the same guest and overlapping dates.
+    Confirm they are genuinely duplicates, keep the booking the guest wants,
+    cancel the redundant one under the duplicate handling path, and make sure only
+    one charge remains.
+  ar: >-
+    يُستخدم عند وجود حجزين أو أكثر لنفس الضيف وبتواريخ متداخلة. تأكد أنها فعلاً
+    مكررة، وأبقِ الحجز الذي يريده الضيف، وألغِ الحجز الزائد عبر مسار معالجة
+    التكرار، وتأكد من بقاء عملية دفع واحدة فقط.
+
+synonyms:
+  en:
+    - duplicate booking
+    - booked twice
+    - two bookings same dates
+    - double booking
+    - charged twice for the same stay
+    - customer booked the same hotel twice
+    - two confirmation numbers same guest
+  ar:
+    - حجز مكرر
+    - حجزت مرتين
+    - حجزين لنفس التواريخ
+    - انسحب المبلغ مرتين
+    - نفس الحجز تكرر
+    - في حجزين لنفس الضيف
+
+applies_when:
+  - Two or more bookings exist for the same guest name with overlapping stay or travel dates.
+  - The Duplicate Check panel on the booking flags a possible duplicate.
+  - The customer states they only intended to book once, or asks about two charges.
+
+does_not_apply_when:
+  - The bookings are for different guests travelling together in separate rooms.
+  - The dates overlap intentionally, for example two rooms on the same booking dates for a family.
+  - Only one booking exists and the customer sees a pending authorisation rather than a second charge.
+
+required_information:
+  - Both booking references
+  - Which booking the customer wants to keep
+  - Whether both bookings were paid, or one is still a pending authorisation
+  - Whether the bookings differ in room type, occupancy, or rate conditions
+  - Whether any booking is already inside its non-refundable period
+
+steps:
+  - number: 1
+    instruction: >-
+      Open the Duplicate Check panel and list every booking it links to the guest,
+      with the reference, dates, room type, and payment state of each.
+    instruction_ar: >-
+      افتح لوحة فحص التكرار واستعرض كل الحجوزات المرتبطة بالضيف، مع رقم الحجز
+      والتواريخ ونوع الغرفة وحالة الدفع لكل منها.
+    screen: Duplicate Check
+    ui_element: Linked bookings
+    expected_result: A complete list of candidate duplicate bookings is on screen.
+    screenshot: agentdesk-duplicate-check
+  - number: 2
+    instruction: >-
+      Rule out intentional overlap by confirming with the customer how many rooms
+      and how many travellers they actually need.
+    instruction_ar: >-
+      استبعد التكرار المقصود بالتأكد من العميل عن عدد الغرف وعدد المسافرين الذي
+      يحتاجه فعلاً.
+    screen: Case Notes
+    expected_result: The case records that the overlap is unintended.
+  - number: 3
+    instruction: >-
+      Compare the bookings side by side and point out any difference in room type,
+      occupancy, or rate conditions before the customer chooses.
+    instruction_ar: >-
+      قارن الحجوزات جنباً إلى جنب ووضّح أي اختلاف في نوع الغرفة أو عدد الأشخاص أو
+      شروط السعر قبل أن يختار العميل.
+    screen: Duplicate Check
+    ui_element: Compare bookings
+    expected_result: The customer knows what differs between the bookings.
+  - number: 4
+    instruction: >-
+      Ask the customer which booking to keep and record their choice explicitly,
+      including the reference of the booking to be cancelled.
+    instruction_ar: >-
+      اسأل العميل أي حجز يريد الإبقاء عليه وسجّل اختياره بشكل صريح، مع رقم الحجز
+      الذي سيتم إلغاؤه.
+    screen: Case Notes
+    expected_result: The case names the booking to keep and the booking to cancel.
+  - number: 5
+    instruction: >-
+      Cancel the redundant booking using Cancel as Duplicate so the cancellation is
+      recorded under the duplicate handling path rather than as a customer-initiated
+      cancellation.
+    instruction_ar: >-
+      ألغِ الحجز الزائد باستخدام "إلغاء كحجز مكرر" ليُسجّل الإلغاء تحت مسار معالجة
+      التكرار وليس كإلغاء بمبادرة العميل.
+    screen: Booking Detail
+    ui_element: Cancel as Duplicate
+    expected_result: The redundant booking is cancelled with the duplicate reason recorded.
+    screenshot: agentdesk-cancel-as-duplicate
+  - number: 6
+    instruction: >-
+      Check the Payment Details panel on the cancelled booking and confirm whether
+      a charge or a pending authorisation needs to be released.
+    instruction_ar: >-
+      تحقق من لوحة تفاصيل الدفع في الحجز الملغى وتأكد إن كان هناك مبلغ مدفوع أو
+      حجز مبلغ مؤقت يحتاج إلى تحرير.
+    screen: Payment Details
+    expected_result: The payment state of the cancelled booking is known.
+  - number: 7
+    instruction: >-
+      Link the two cases so the refund of the duplicate can be tracked against the
+      surviving booking, then send template CXL-DUP-01 confirming which booking
+      remains active.
+    instruction_ar: >-
+      اربط الحالتين ليتم تتبع استرداد الحجز المكرر مقابل الحجز الباقي، ثم أرسل
+      القالب CXL-DUP-01 لتأكيد الحجز الذي بقي نشطاً.
+    screen: Messages
+    ui_element: Send template
+    expected_result: The customer has written confirmation of the surviving booking and the refund reference.
+
+decision_branches:
+  - condition: The bookings differ in room type or occupancy.
+    then: Treat them as separate bookings unless the customer confirms the overlap was unintended.
+  - condition: The redundant booking is inside a non-refundable period.
+    then: Cancel as Duplicate anyway and record the non-refundable flag; the duplicate path is not a customer-initiated cancellation.
+  - condition: One booking is only a pending authorisation.
+    then: Cancel that one first so the authorisation is released rather than charged.
+  - condition: The duplicate was created by an agent, not the customer.
+    then: Add the Agent Duplicate flag so the case is reviewed internally, and never present the cause to the customer as their error.
+  - condition: The two bookings sit with different suppliers.
+    then: Confirm the cancellation with the supplier of the redundant booking through the Supplier Log before closing the case.
+
+do:
+  - Confirm with the customer that the overlap was unintended before cancelling anything.
+  - Point out room type and rate differences before the customer chooses which to keep.
+  - Use Cancel as Duplicate so the cancellation reason is recorded correctly.
+  - Link the cases so the refund can be traced against the surviving booking.
+
+do_not:
+  - Do not choose which booking to cancel on the customer's behalf.
+  - Do not cancel a booking that is the only confirmed one for those dates.
+  - Do not use the standard cancellation path for a duplicate; the reason code matters for the refund.
+  - Do not quote a refund date for the duplicate; the refund follows the refund timeline on that booking.
+
+exceptions:
+  - If both bookings are already checked in or partially consumed, escalate instead of cancelling; the stay may need supplier confirmation of what was actually used.
+  - If the duplicate involves different payment methods belonging to different people, Payments Support must confirm who is refunded before cancellation.
+  - If the Duplicate Check panel finds no link but the customer insists on two charges, verify the second charge against the Payment Details panel; a pending authorisation is not a duplicate booking.
+
+escalation:
+  trigger: >-
+    Both bookings are partially consumed, the payment methods belong to different
+    people, or the customer disputes which booking should survive.
+  queue: Northwind Travel Cancellations Review (Tier 2)
+  contact_channel: AgentDesk Escalate button (case queue)
+  response_target: The review target displayed on the escalation card
+  approval_required: false
+
+customer_wording:
+  en: >-
+    I can see two bookings for the same dates under your name. Before I cancel
+    anything, let me show you how they differ so you can tell me which one to
+    keep. Once you confirm, I'll cancel the other one as a duplicate and send you
+    written confirmation of the booking that stays active, along with the refund
+    reference for the cancelled one.
+  ar: >-
+    أرى حجزين لنفس التواريخ باسمك. قبل أن ألغي أي شيء، دعني أوضح لك الفرق بينهما
+    لتخبرني أي حجز تريد الإبقاء عليه. بعد تأكيدك، سألغي الآخر كحجز مكرر وأرسل لك
+    تأكيداً كتابياً بالحجز الذي سيبقى نشطاً مع مرجع استرداد الحجز الملغى.
+
+related_procedures:
+  - NW-REF-018
+  - NW-HTL-021
+
+version: "1.2"
+effective_date: 2026-02-25
+owner_team: Northwind Travel Cancellations Review

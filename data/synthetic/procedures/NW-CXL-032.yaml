@@ -1,0 +1,196 @@
+# FICTIONAL — SYNTHETIC DEMO DATA
+# Invented procedure for the invented travel agency "Northwind Travel".
+procedure_id: NW-CXL-032
+title: Cancellation request for a non-refundable booking
+title_ar: طلب إلغاء حجز غير قابل للاستراد
+product_line: cancellations
+scenario_tags:
+  - non_refundable
+  - cancellation_request
+  - waiver_request
+severity: approval_required
+
+summary:
+  en: >-
+    Use when a customer asks to cancel a booking whose rate is marked
+    non-refundable. State the rate condition plainly, check whether a documented
+    waiver ground applies, and route any waiver through the approval path instead
+    of promising an outcome.
+  ar: >-
+    يُستخدم عندما يطلب العميل إلغاء حجز بسعر غير قابل للاستراد. اشرح شرط السعر
+    بوضوح، وتحقق إن كان هناك سبب استثناء موثّق، ووجّه أي طلب استثناء إلى مسار
+    الموافقة بدون الوعد بنتيجة.
+
+synonyms:
+  en:
+    - cancel a non-refundable booking
+    - non refundable cancellation
+    - customer wants refund on non-refundable rate
+    - waiver request for cancellation fee
+    - cancel prepaid non refundable room
+    - refund request outside policy
+    - free cancellation not available
+  ar:
+    - إلغاء حجز غير قابل للاستراد
+    - العميل بدو يلغي حجز غير مسترد
+    - طلب استثناء من شرط عدم الاستراد
+    - إلغاء حجز مدفوع مقدماً
+    - طلب استرداد خارج الشروط
+
+applies_when:
+  - The Rate Conditions panel marks the booking as Non-refundable.
+  - The customer has asked to cancel or to receive a refund.
+  - The stay or travel date has not yet passed, or passed within the review window shown on the case.
+
+does_not_apply_when:
+  - The rate shows a free cancellation window that is still open; cancel it directly instead.
+  - The supplier caused the cancellation, for example a property that cannot host the guest (use NW-HTL-014).
+  - The refund was already approved and is simply late (use NW-REF-018).
+
+required_information:
+  - Booking reference
+  - Reason the customer is cancelling, in their own words
+  - Whether any documented waiver ground applies
+  - Supporting documents if a waiver ground is claimed
+  - Whether the customer still wants the cancellation if no refund is granted
+
+steps:
+  - number: 1
+    instruction: >-
+      Open the Rate Conditions panel and read the cancellation terms recorded on
+      the booking. Quote only what this panel says; rate rules differ per booking.
+    instruction_ar: >-
+      افتح لوحة شروط السعر واقرأ شروط الإلغاء المسجلة على الحجز. اذكر فقط ما تظهره
+      هذه اللوحة؛ شروط الأسعار تختلف من حجز لآخر.
+    screen: Rate Conditions
+    ui_element: Cancellation terms
+    expected_result: The exact non-refundable terms for this booking are on screen.
+    screenshot: agentdesk-rate-conditions
+  - number: 2
+    instruction: >-
+      Tell the customer the rate condition in plain language before discussing any
+      options, and confirm they understand that a refund is not guaranteed.
+    instruction_ar: >-
+      اشرح للعميل شرط السعر بلغة واضحة قبل مناقشة أي خيارات، وتأكد أنه يفهم أن
+      الاسترداد غير مضمون.
+    screen: Case Notes
+    expected_result: The case records that the rate condition was explained.
+  - number: 3
+    instruction: >-
+      Ask why the customer is cancelling and record the answer in their own words.
+      The reason determines whether a waiver ground exists.
+    instruction_ar: >-
+      اسأل العميل عن سبب الإلغاء وسجّل الجواب بكلماته. السبب هو ما يحدد وجود سبب
+      استثناء أو عدمه.
+    screen: Case Notes
+    expected_result: The stated reason is recorded verbatim.
+  - number: 4
+    instruction: >-
+      Open the Waiver Grounds checklist and compare the stated reason against the
+      grounds listed there. Only the grounds on that checklist qualify.
+    instruction_ar: >-
+      افتح قائمة أسباب الاستثناء وقارن السبب المذكور بالأسباب المدرجة فيها. الأسباب
+      المدرجة هناك فقط هي المؤهلة.
+    screen: Waiver Grounds
+    ui_element: Check eligibility
+    expected_result: The reason either matches a listed ground or it does not.
+    screenshot: agentdesk-waiver-grounds
+  - number: 5
+    instruction: >-
+      If a ground applies, request the supporting document listed next to that
+      ground and attach it to the case before submitting anything.
+    instruction_ar: >-
+      إذا انطبق أحد الأسباب، اطلب المستند الداعم المذكور بجانبه وأرفقه بالحالة قبل
+      إرسال أي طلب.
+    screen: Documents
+    ui_element: Attach supporting document
+    expected_result: The required document is attached, or the ground is marked unsupported.
+  - number: 6
+    instruction: >-
+      Submit the waiver through Request Waiver Approval. The request goes to the
+      approver named on the case; the outcome is theirs, not yours.
+    instruction_ar: >-
+      أرسل طلب الاستثناء عبر "طلب موافقة على الاستثناء". يُحال الطلب إلى الشخص
+      المعتمد المذكور في الحالة، والقرار يعود إليه وليس إليك.
+    screen: Waiver Grounds
+    ui_element: Request Waiver Approval
+    expected_result: A waiver request exists on the case with a decision pending.
+  - number: 7
+    instruction: >-
+      Ask the customer to confirm whether they still want the booking cancelled if
+      the waiver is declined, and record that instruction.
+    instruction_ar: >-
+      اسأل العميل إن كان لا يزال يريد إلغاء الحجز في حال رُفض الاستثناء، وسجّل
+      تعليماته.
+    screen: Case Notes
+    expected_result: The customer's instruction for the declined scenario is recorded.
+  - number: 8
+    instruction: >-
+      Send the written summary using template CXL-NONREF-01, stating what was
+      requested, what was submitted, and that the decision is pending.
+    instruction_ar: >-
+      أرسل ملخصاً كتابياً باستخدام القالب CXL-NONREF-01 يوضح ما تم طلبه وما تم
+      إرساله وأن القرار قيد الدراسة.
+    screen: Messages
+    ui_element: Send template
+    expected_result: The customer has a written record with no promised outcome.
+
+decision_branches:
+  - condition: No waiver ground on the checklist applies.
+    then: Explain that the rate condition stands, and cancel only if the customer confirms they still want to cancel without a refund.
+  - condition: A waiver ground applies but the supporting document is not yet available.
+    then: Keep the case open, record what is missing, and do not submit an incomplete waiver request.
+  - condition: The customer disputes the rate condition itself.
+    then: Escalate to Cancellations Review with the Rate Conditions panel attached; do not reinterpret the terms yourself.
+  - condition: The travel or stay date has already passed.
+    then: Check the review window shown on the case; if it has closed, escalate instead of submitting a waiver.
+  - condition: The supplier separately offers a goodwill exception.
+    then: Record the supplier's offer in the Supplier Log and submit it with the waiver request as evidence.
+
+do:
+  - Read the rate condition off the booking rather than from memory.
+  - Record the customer's reason in their own words before checking eligibility.
+  - Tell the customer clearly that a waiver decision belongs to the approver.
+  - Attach every supporting document before submitting a waiver request.
+
+do_not:
+  - Do not tell the customer a refund will be approved, or state any likelihood of approval.
+  - Do not quote a fee, penalty, or refundable amount that is not displayed in the Rate Conditions panel.
+  - Do not cancel the booking before the customer confirms they accept cancelling without a guaranteed refund.
+  - Do not submit a waiver request without the document listed for that ground.
+
+exceptions:
+  - If the booking is inside a free cancellation window that is still open, this procedure does not apply; cancel it directly under the normal cancellation flow.
+  - If the cancellation is caused by the supplier, the non-refundable condition does not apply and the case follows the supplier-caused path.
+  - If the customer reports a medical or bereavement ground, follow the document list on the Waiver Grounds checklist exactly and do not request additional documents beyond it.
+
+escalation:
+  trigger: >-
+    The customer disputes the recorded rate condition, the review window has
+    closed, or the waiver ground is unclear from the checklist.
+  queue: Northwind Travel Cancellations Review (Tier 2)
+  contact_channel: AgentDesk Escalate button (case queue)
+  response_target: The review target displayed on the escalation card
+  approval_required: true
+  approver_role: Cancellations Review Approver
+
+customer_wording:
+  en: >-
+    The rate on this booking is recorded as non-refundable, so I can't promise a
+    refund. What I can do is submit a review request with the reason you've given
+    me and the supporting document, and the decision is made by our review team.
+    I'll confirm in writing what I've submitted, and I'll come back to you with
+    their decision.
+  ar: >-
+    سعر هذا الحجز مسجّل على أنه غير قابل للاستراد، لذلك لا أستطيع أن أوعدك
+    بالاسترداد. ما يمكنني عمله هو تقديم طلب مراجعة بالسبب الذي ذكرته والمستند
+    الداعم، والقرار يصدر من فريق المراجعة. سأؤكد لك كتابياً ما قدمته، وسأعود إليك
+    بقرارهم.
+
+related_procedures:
+  - NW-REF-018
+  - NW-HTL-014
+
+version: "3.0"
+effective_date: 2026-04-15
+owner_team: Northwind Travel Cancellations Review

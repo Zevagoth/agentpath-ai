@@ -1,0 +1,190 @@
+# FICTIONAL — SYNTHETIC DEMO DATA
+# Invented procedure for the invented travel agency "Northwind Travel".
+procedure_id: NW-REF-018
+title: Approved refund has not arrived within the expected window
+title_ar: مبلغ الاسترداد المعتمد لم يصل خلال المدة المتوقعة
+product_line: refunds
+scenario_tags:
+  - delayed_refund
+  - refund_not_received
+  - payment_trace
+severity: routine
+
+summary:
+  en: >-
+    Use when a refund is already approved but the customer says the money has not
+    arrived. Establish which stage the refund is at from the Refund Timeline,
+    give the customer the stage they are actually in, and open a payment trace
+    only when the settlement window shown on the case has passed.
+  ar: >-
+    يُستخدم عندما يكون الاسترداد معتمداً لكن العميل يقول إن المبلغ لم يصل. حدّد
+    المرحلة الحالية من الجدول الزمني للاسترداد، وأبلغ العميل بمرحلته الفعلية، ولا
+    تفتح تتبع دفعة إلا بعد انتهاء مدة التسوية الظاهرة في الحالة.
+
+synonyms:
+  en:
+    - refund delayed
+    - refund not received
+    - where is my refund
+    - money not back yet
+    - refund taking too long
+    - refund still pending
+    - refund approved but not paid
+    - late refund
+  ar:
+    - الاسترداد متأخر
+    - ما وصلني المبلغ
+    - وين فلوسي
+    - الاسترداد لسا ما وصل
+    - المبلغ ما رجع لحسابي
+    - تأخر استرداد المبلغ
+
+applies_when:
+  - The Refund Timeline shows the refund status as Approved, Sent, or Settling.
+  - The customer states the amount has not appeared on their statement.
+
+does_not_apply_when:
+  - No refund has been approved yet; the request is still under review (use NW-CXL-032).
+  - The customer disputes the refund amount rather than its arrival.
+  - The booking is still active and no cancellation exists.
+
+required_information:
+  - Booking reference
+  - Original payment method and last four digits, as shown on the booking
+  - Date the customer last checked their statement
+  - Whether the card or account is still open and in the same currency
+  - Whether the refund was issued to the original method or to travel credit
+
+steps:
+  - number: 1
+    instruction: >-
+      Open the Refund Timeline on the booking and read the current stage together
+      with the settlement window shown next to it.
+    instruction_ar: >-
+      افتح الجدول الزمني للاسترداد في الحجز واقرأ المرحلة الحالية ومدة التسوية
+      الظاهرة بجانبها.
+    screen: Refund Timeline
+    ui_element: Refund stage
+    expected_result: The stage (Approved, Sent, or Settling) and its window are known.
+    screenshot: agentdesk-refund-timeline
+  - number: 2
+    instruction: >-
+      Confirm the destination of the refund: the original payment method or travel
+      credit. A refund sent to travel credit will never appear on a card statement.
+    instruction_ar: >-
+      تأكد من جهة الاسترداد: وسيلة الدفع الأصلية أم رصيد سفر. الاسترداد إلى رصيد
+      السفر لن يظهر أبداً في كشف حساب البطاقة.
+    screen: Payment Details
+    ui_element: Refund destination
+    expected_result: The refund destination is confirmed and stated to the customer.
+  - number: 3
+    instruction: >-
+      Compare today's date against the settlement window from step 1 and tell the
+      customer plainly whether the window is still open or has passed.
+    instruction_ar: >-
+      قارن تاريخ اليوم بمدة التسوية من الخطوة 1 وأبلغ العميل بوضوح إن كانت المدة
+      لا تزال سارية أم انتهت.
+    screen: Refund Timeline
+    expected_result: The customer knows whether the refund is late or still in progress.
+  - number: 4
+    instruction: >-
+      If the window is still open, explain the remaining time using the dates on
+      the timeline and offer to send the refund reference in writing.
+    instruction_ar: >-
+      إذا كانت المدة سارية، اشرح الوقت المتبقي حسب التواريخ في الجدول الزمني واعرض
+      إرسال مرجع الاسترداد كتابياً.
+    screen: Messages
+    ui_element: Send template
+    expected_result: The customer has the refund reference and the expected date range.
+  - number: 5
+    instruction: >-
+      If the window has passed, open Payment Trace and submit a trace with the
+      refund reference and the payment method details from the booking.
+    instruction_ar: >-
+      إذا انتهت المدة، افتح "تتبع الدفعة" وأرسل طلب تتبع مع مرجع الاسترداد وتفاصيل
+      وسيلة الدفع من الحجز.
+    screen: Payment Trace
+    ui_element: Open trace
+    expected_result: A payment trace exists with a case reference the customer can quote.
+    screenshot: agentdesk-payment-trace
+  - number: 6
+    instruction: >-
+      Ask the customer for a bank statement covering the settlement window if
+      Payment Trace requests it, and attach it to the trace.
+    instruction_ar: >-
+      اطلب من العميل كشف حساب يغطي مدة التسوية إذا طلبت أداة التتبع ذلك، وأرفقه
+      بالطلب.
+    screen: Documents
+    ui_element: Attach supporting document
+    expected_result: The trace has the evidence it asked for, or is marked as not requiring it.
+  - number: 7
+    instruction: >-
+      Send the written summary with template REF-TRACE-01, including the refund
+      reference, the trace reference, and the next update date shown on the trace.
+    instruction_ar: >-
+      أرسل ملخصاً كتابياً بالقالب REF-TRACE-01 يشمل مرجع الاسترداد ومرجع التتبع
+      وتاريخ التحديث التالي الظاهر في الطلب.
+    screen: Messages
+    ui_element: Send template
+    expected_result: The customer holds both references and knows when the next update is due.
+
+decision_branches:
+  - condition: The refund was issued to travel credit rather than the original method.
+    then: Show the customer the credit balance location and close the case without a payment trace.
+  - condition: The settlement window is still open.
+    then: Give the remaining time from the timeline and do not open a trace yet.
+    goto_step: 4
+  - condition: The original card is closed, expired, or in a different currency.
+    then: Escalate to Payments Support; the refund may need reissuing to a different method.
+  - condition: The Refund Timeline shows a failed transmission.
+    then: Escalate to Payments Support immediately and do not ask the customer for a statement first.
+  - condition: A trace already exists and its next update date has passed.
+    then: Escalate the existing trace instead of opening a second one.
+
+do:
+  - Read the stage and the settlement window off the Refund Timeline before saying anything about timing.
+  - Confirm whether the refund went to the original method or to travel credit.
+  - Give the customer the refund reference in writing.
+  - Tell the customer the date of the next update rather than an arrival date you cannot see.
+
+do_not:
+  - Do not state a refund arrival date that is not shown on the Refund Timeline.
+  - Do not open a second payment trace when one is already open.
+  - Do not ask for a bank statement unless Payment Trace requests it.
+  - Do not tell the customer their bank is at fault; the trace establishes where the payment is.
+
+exceptions:
+  - If the customer reports the refund arrived partially, treat it as an amount dispute and route it to Payments Support rather than opening a trace.
+  - If the refund destination account belongs to a third party, Payments Support must verify ownership before any trace is actioned.
+  - If the booking was paid through a method that the Payment Details panel marks as non-traceable, escalate rather than opening a trace.
+
+escalation:
+  trigger: >-
+    The original payment method is closed or in a different currency, the
+    timeline shows a failed transmission, a trace has passed its update date, or
+    the amount received does not match the approved amount.
+  queue: Northwind Travel Payments Support (Tier 2)
+  contact_channel: AgentDesk Escalate button (case queue)
+  response_target: The update target displayed on the trace card
+  approval_required: false
+
+customer_wording:
+  en: >-
+    I can see the refund was approved and I can tell you exactly which stage it's
+    at. Based on the timeline on your booking, the settlement window closed, so
+    I've opened a payment trace and I'll send you the trace reference in writing.
+    The next update is due on the date shown on that trace, and I'll follow it up
+    for you.
+  ar: >-
+    أستطيع أن أرى أن الاسترداد قد اعتُمد، وأستطيع إخبارك بالمرحلة التي وصل إليها.
+    بحسب الجدول الزمني في حجزك، انتهت مدة التسوية، لذلك فتحت طلب تتبع للدفعة
+    وسأرسل لك مرجع الطلب كتابياً. التحديث التالي مستحق في التاريخ الظاهر على الطلب،
+    وسأتابعه بنفسي.
+
+related_procedures:
+  - NW-CXL-032
+  - NW-CXL-045
+
+version: "1.7"
+effective_date: 2026-01-20
+owner_team: Northwind Travel Payments Support

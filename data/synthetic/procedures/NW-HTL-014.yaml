@@ -1,0 +1,234 @@
+# FICTIONAL — SYNTHETIC DEMO DATA
+# Invented procedure for the invented travel agency "Northwind Travel".
+# No real company policy is reproduced here.
+procedure_id: NW-HTL-014
+title: Property unable to accommodate a confirmed guest (walked guest)
+title_ar: مكان الإقامة غير قادر على استقبال ضيف يحمل حجزاً مؤكداً
+product_line: hotels
+scenario_tags:
+  - overbooking
+  - walked_guest
+  - relocation
+  - property_unable_to_host
+severity: time_critical
+
+summary:
+  en: >-
+    Use when a property confirms it cannot host a guest who holds a confirmed
+    Northwind Travel booking. Secure equivalent-or-better alternative
+    accommodation, keep the original booking open until the alternative is
+    issued, record the verified cost difference, and keep the guest informed in
+    writing.
+  ar: >-
+    يُستخدم عندما يؤكد مكان الإقامة أنه غير قادر على استقبال ضيف يحمل حجزاً
+    مؤكداً من Northwind Travel. أمّن إقامة بديلة مكافئة أو أفضل، وأبقِ الحجز
+    الأصلي مفتوحاً حتى يصدر البديل، وسجّل فرق التكلفة المثبت، وأبلغ الضيف كتابياً.
+
+synonyms:
+  en:
+    - hotel has no room
+    - overbooking
+    - property overbooked
+    - guest was walked
+    - hotel refused check-in
+    - no rooms available on arrival
+    - hotel cannot host the guest
+    - relocation needed
+    - hotel turned the guest away
+  ar:
+    - الفندق ما عنده غرف
+    - الفندق مباع بالكامل
+    - الفندق رفض تسجيل الوصول
+    - الفندق ما بيقدر يستقبل الضيف
+    - نقل الضيف لمكان إقامة بديل
+    - الضيف انرفض عند الاستقبال
+
+applies_when:
+  - The booking status in AgentDesk is Confirmed.
+  - The property states that no room is available for one or more nights of the stay.
+  - The guest has already arrived, or arrival is within 48 hours.
+
+does_not_apply_when:
+  - The property cannot locate the booking but has rooms available (use NW-HTL-021).
+  - The customer wants to cancel or change dates by choice (use NW-CXL-032).
+  - Two bookings exist for the same guest and dates (use NW-CXL-045).
+
+required_information:
+  - Booking reference
+  - Whether the guest is physically at the property right now
+  - Name and role of the property contact who refused
+  - Which nights of the stay are affected
+  - Number of guests and rooms on the booking
+
+steps:
+  - number: 1
+    instruction: >-
+      Open the booking in AgentDesk and confirm on the Booking Detail screen that
+      the status chip reads Confirmed. Note the booking reference and the room type.
+    instruction_ar: >-
+      افتح الحجز في AgentDesk وتأكد من شاشة تفاصيل الحجز أن حالة الحجز "مؤكد".
+      سجّل رقم الحجز ونوع الغرفة.
+    screen: Booking Detail
+    ui_element: Booking status chip
+    expected_result: Status chip shows Confirmed and the stay dates match the guest's report.
+    screenshot: agentdesk-booking-detail-status
+  - number: 2
+    instruction: >-
+      Ask the guest whether they are at the property now, and record the answer on
+      the case. A guest standing at the reception desk makes this case
+      time-critical and changes the order of the remaining steps.
+    instruction_ar: >-
+      اسأل الضيف إذا كان موجوداً في مكان الإقامة حالياً، وسجّل الجواب على الحالة.
+      وجود الضيف عند الاستقبال يجعل الحالة عاجلة ويغيّر ترتيب الخطوات التالية.
+    screen: Case Notes
+    expected_result: The case records the guest's location.
+  - number: 3
+    instruction: >-
+      Call the property using the number on the Supplier Contact panel. Confirm
+      the refusal directly with the property and capture the name and role of the
+      person, the stated reason, and the number of nights affected.
+    instruction_ar: >-
+      اتصل بمكان الإقامة على الرقم الظاهر في لوحة بيانات المورد. أكّد الرفض من
+      المورد مباشرة، وسجّل اسم الشخص ووظيفته والسبب المعلن وعدد الليالي المتأثرة.
+    screen: Supplier Contact
+    ui_element: Call supplier
+    expected_result: The refusal is confirmed by the property, not only reported by the guest.
+  - number: 4
+    instruction: >-
+      Log the call in the Supplier Log with the outcome "Cannot accommodate" and
+      paste the details captured in step 3.
+    instruction_ar: >-
+      سجّل المكالمة في سجل المورد باستخدام النتيجة "غير قادر على الاستقبال" وأضف
+      التفاصيل التي جمعتها في الخطوة 3.
+    screen: Supplier Log
+    ui_element: Log supplier contact
+    expected_result: A timestamped supplier log entry exists on the booking.
+    screenshot: agentdesk-supplier-log
+  - number: 5
+    instruction: >-
+      Open Relocation Finder and search for equivalent-or-better stays for the
+      affected nights, keeping the default distance filter around the original
+      property.
+    instruction_ar: >-
+      افتح أداة إيجاد البديل وابحث عن إقامة مكافئة أو أفضل لليالي المتأثرة، مع
+      الإبقاء على فلتر المسافة الافتراضي حول مكان الإقامة الأصلي.
+    screen: Relocation Finder
+    ui_element: Find equivalent stays
+    expected_result: At least one option marked Equivalent or Better is listed.
+    screenshot: agentdesk-relocation-finder
+  - number: 6
+    instruction: >-
+      Present the shortlisted option to the guest and get their agreement before
+      booking anything.
+    instruction_ar: >-
+      اعرض الخيار المختار على الضيف واحصل على موافقته قبل إجراء أي حجز.
+    screen: Relocation Finder
+    expected_result: The guest has agreed to a specific alternative.
+  - number: 7
+    instruction: >-
+      Issue the alternative with Rebook and Link so the new booking stays attached
+      to the original case. Do not cancel the original booking until the new
+      confirmation number is visible.
+    instruction_ar: >-
+      أصدر الحجز البديل باستخدام "إعادة الحجز والربط" ليبقى مرتبطاً بالحالة
+      الأصلية. لا تُلغِ الحجز الأصلي قبل ظهور رقم تأكيد الحجز الجديد.
+    screen: Relocation Finder
+    ui_element: Rebook and Link
+    expected_result: A linked alternative booking exists with its own confirmation number.
+  - number: 8
+    instruction: >-
+      Record the verified cost difference in the Cost Recovery tab and attach the
+      supplier evidence. The tab displays the pre-approved limit that applies to
+      this booking; never quote a figure that is not shown there.
+    instruction_ar: >-
+      سجّل فرق التكلفة المثبت في تبويب استرداد التكاليف وأرفق إثبات المورد. يُظهر
+      التبويب الحد المعتمد مسبقاً لهذا الحجز؛ لا تذكر أي مبلغ غير ظاهر فيه.
+    screen: Cost Recovery
+    ui_element: Add verified cost
+    expected_result: The recorded difference sits at or below the displayed pre-approved limit.
+  - number: 9
+    instruction: >-
+      Send the guest written confirmation of the new stay using template
+      HTL-RELOC-01, including the new address and check-in details.
+    instruction_ar: >-
+      أرسل للضيف تأكيداً كتابياً للإقامة الجديدة باستخدام القالب HTL-RELOC-01،
+      ويشمل العنوان الجديد وتفاصيل تسجيل الوصول.
+    screen: Messages
+    ui_element: Send template
+    expected_result: The guest has the new confirmation in writing.
+  - number: 10
+    instruction: >-
+      If the guest is at the property and no alternative is confirmed within 30
+      minutes of the supplier log entry, escalate without waiting for further
+      supplier replies.
+    instruction_ar: >-
+      إذا كان الضيف في مكان الإقامة ولم يتم تأكيد بديل خلال 30 دقيقة من تسجيل
+      المورد، فارفع الحالة دون انتظار ردود إضافية من المورد.
+    screen: Case Header
+    ui_element: Escalate
+    expected_result: The case is in the Accommodation Support queue with the supplier log attached.
+
+decision_branches:
+  - condition: The guest is already at the property.
+    then: Treat the case as time-critical and start the escalation in parallel with the relocation search.
+    otherwise: Continue the steps in order.
+    goto_step: 10
+  - condition: Only later nights of the stay are affected.
+    then: Arrange relocation for the affected nights only and keep the original booking for the remaining nights.
+  - condition: The property calls back to confirm a room is available after all.
+    then: Reconfirm the original booking, release the provisional alternative, and add the reversal to the Supplier Log.
+  - condition: The verified cost difference is above the pre-approved limit shown in the Cost Recovery tab.
+    then: Request supervisor approval before confirming the alternative.
+  - condition: No equivalent-or-better option exists within the default distance filter.
+    then: Escalate to Accommodation Support and let the queue authorise a wider search.
+
+do:
+  - Confirm the refusal with the property directly before relocating anyone.
+  - Keep the original booking open until the alternative confirmation number exists.
+  - Record every supplier contact attempt, including unanswered calls.
+  - Give the guest a written confirmation, not only a verbal one.
+
+do_not:
+  - Do not cancel the original booking before the alternative is confirmed.
+  - Do not promise any compensation amount that is not displayed in the Cost Recovery tab.
+  - Do not ask the guest to pay for the alternative themselves unless the Cost Recovery tab shows that option as available for this booking.
+  - Do not relocate a guest to a lower category stay without their explicit recorded agreement.
+
+exceptions:
+  - If the guest chooses to end the trip instead of relocating, handle the cancellation as supplier-caused under NW-CXL-032 and note the link to this case.
+  - If the property is the only lodging inside the destination filter, escalate immediately instead of widening the search yourself.
+  - >-
+    If the affected nights are more than 14 days in the future, the case is not
+    time-critical, so follow the steps without the 30-minute escalation trigger.
+
+escalation:
+  trigger: >-
+    The guest is at the property without a confirmed alternative, no
+    equivalent-or-better option exists, or the verified cost difference exceeds
+    the pre-approved limit shown in AgentDesk.
+  queue: Northwind Travel Accommodation Support (Tier 2)
+  contact_channel: AgentDesk Escalate button (live queue)
+  response_target: The first-response target displayed on the escalation card
+  approval_required: true
+  approver_role: Accommodation Support Supervisor
+
+customer_wording:
+  en: >-
+    I've confirmed directly with the property that they aren't able to host you
+    for your booked dates. I'm arranging an equivalent or better stay nearby now,
+    and I'll send you the new confirmation in writing as soon as it's issued. The
+    verified difference in price is handled by us, so there's nothing for you to
+    pay at the new property.
+  ar: >-
+    تأكدت مباشرة من مكان الإقامة أنه غير قادر على استقبالك في التواريخ المحجوزة.
+    أنا الآن أرتّب إقامة مكافئة أو أفضل في منطقة قريبة، وسأرسل لك التأكيد الجديد
+    كتابياً فور إصداره. فرق السعر المثبت نتكفّل به نحن، ولا يوجد أي مبلغ مطلوب
+    منك في مكان الإقامة الجديد.
+
+related_procedures:
+  - NW-HTL-021
+  - NW-CXL-032
+
+version: "2.1"
+effective_date: 2026-03-01
+owner_team: Northwind Travel Accommodation Support

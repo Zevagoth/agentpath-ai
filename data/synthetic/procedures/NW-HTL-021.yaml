@@ -1,0 +1,190 @@
+# FICTIONAL — SYNTHETIC DEMO DATA
+# Invented procedure for the invented travel agency "Northwind Travel".
+procedure_id: NW-HTL-021
+title: Property cannot locate a booking that Northwind Travel shows as confirmed
+title_ar: مكان الإقامة لا يجد الحجز الذي يظهر مؤكداً في Northwind Travel
+product_line: hotels
+scenario_tags:
+  - booking_not_found_at_property
+  - missing_reservation
+  - supplier_record_mismatch
+severity: time_critical
+
+summary:
+  en: >-
+    Use when AgentDesk shows a confirmed booking but the property says it has no
+    record of it. Prove the booking to the property with the supplier voucher,
+    get a named confirmation that it is reinstated, and only treat it as a
+    no-room case if the property states no room is available.
+  ar: >-
+    يُستخدم عندما يظهر الحجز مؤكداً في AgentDesk لكن مكان الإقامة يقول إنه لا يجد
+    أي سجل له. أثبت الحجز للمورد عبر سند التأكيد، واحصل على تثبيت باسم موظف
+    محدد، ولا تتعامل مع الحالة كعدم توفر غرفة إلا إذا صرّح المورد بذلك.
+
+synonyms:
+  en:
+    - hotel cannot find the booking
+    - property has no record of the reservation
+    - booking missing at the hotel
+    - hotel says no reservation exists
+    - reservation not in the property system
+    - guest arrived and hotel has no booking
+    - supplier cannot find confirmation number
+  ar:
+    - الفندق ما لاقى الحجز
+    - الفندق ما عنده أي سجل للحجز
+    - الحجز غير موجود عند الفندق
+    - الفندق يقول لا يوجد حجز
+    - الحجز مش ظاهر بنظام الفندق
+
+applies_when:
+  - AgentDesk shows the booking as Confirmed with a supplier confirmation number.
+  - The property states it cannot find the reservation in its own system.
+  - The guest is at the property, or arrival is within 48 hours.
+
+does_not_apply_when:
+  - The property found the booking but has no room available (use NW-HTL-014).
+  - The booking shows as Cancelled in AgentDesk.
+  - The guest holds two bookings for the same dates (use NW-CXL-045).
+
+required_information:
+  - Booking reference and supplier confirmation number
+  - Exact guest name spelling as it appears on the booking
+  - Name and role of the property contact who searched for it
+  - Which system the property searched (property management system or channel inbox)
+  - Whether the guest is at the property now
+
+steps:
+  - number: 1
+    instruction: >-
+      Open the Booking Detail screen and confirm the status chip reads Confirmed
+      and a supplier confirmation number is present. If the number is missing,
+      this is a supplier transmission case, not a lookup failure.
+    instruction_ar: >-
+      افتح شاشة تفاصيل الحجز وتأكد أن الحالة "مؤكد" وأن رقم تأكيد المورد موجود.
+      إذا كان الرقم غير موجود، فهذه حالة إرسال من المورد وليست فشل بحث.
+    screen: Booking Detail
+    ui_element: Booking status chip
+    expected_result: Confirmed status with a supplier confirmation number recorded.
+    screenshot: agentdesk-booking-detail-status
+  - number: 2
+    instruction: >-
+      Download the supplier voucher from the Documents panel. This is the document
+      the property needs, not the guest-facing itinerary.
+    instruction_ar: >-
+      نزّل سند المورد من لوحة المستندات. هذا هو المستند الذي يحتاجه المورد، وليس
+      برنامج السفر الخاص بالضيف.
+    screen: Documents
+    ui_element: Download supplier voucher
+    expected_result: The supplier voucher PDF is ready to send.
+    screenshot: agentdesk-documents-voucher
+  - number: 3
+    instruction: >-
+      Call the property and ask them to search by all three keys in turn: the
+      supplier confirmation number, the guest surname, and the arrival date.
+      Record which keys were searched.
+    instruction_ar: >-
+      اتصل بمكان الإقامة واطلب البحث بثلاثة مفاتيح بالتتابع: رقم تأكيد المورد،
+      اسم عائلة الضيف، وتاريخ الوصول. سجّل المفاتيح التي تم البحث بها.
+    screen: Supplier Contact
+    ui_element: Call supplier
+    expected_result: The property has searched by all three keys.
+  - number: 4
+    instruction: >-
+      Send the supplier voucher to the property contact channel shown on the
+      Supplier Contact panel while you are still on the call.
+    instruction_ar: >-
+      أرسل سند المورد إلى قناة التواصل الظاهرة في لوحة بيانات المورد وأنت لا تزال
+      على المكالمة.
+    screen: Supplier Contact
+    ui_element: Send voucher to supplier
+    expected_result: The property has the voucher in hand during the call.
+  - number: 5
+    instruction: >-
+      Ask the property to reinstate the reservation and capture the name and role
+      of the person who confirms it. A reinstatement without a named contact is
+      not a confirmation.
+    instruction_ar: >-
+      اطلب من مكان الإقامة إعادة تثبيت الحجز وسجّل اسم ووظيفة الشخص الذي أكّد ذلك.
+      إعادة التثبيت بدون اسم موظف محدد لا تُعتبر تأكيداً.
+    screen: Supplier Log
+    ui_element: Log supplier contact
+    expected_result: A supplier log entry names the person who reinstated the booking.
+    screenshot: agentdesk-supplier-log
+  - number: 6
+    instruction: >-
+      Tell the guest the booking is reinstated, give them the name of the property
+      contact, and send the written confirmation using template HTL-FOUND-01.
+    instruction_ar: >-
+      أبلغ الضيف أن الحجز أعيد تثبيته، وأعطه اسم موظف مكان الإقامة، وأرسل التأكيد
+      الكتابي باستخدام القالب HTL-FOUND-01.
+    screen: Messages
+    ui_element: Send template
+    expected_result: The guest has the contact name and a written confirmation.
+  - number: 7
+    instruction: >-
+      Raise a Supplier Record Mismatch flag on the booking so the supplier
+      relations team can follow up on the root cause after the guest is settled.
+    instruction_ar: >-
+      أضف علامة "عدم تطابق سجلات المورد" على الحجز ليتابع فريق علاقات الموردين
+      السبب الجذري بعد استقرار الضيف.
+    screen: Booking Detail
+    ui_element: Flag supplier issue
+    expected_result: The mismatch flag is visible on the booking.
+
+decision_branches:
+  - condition: The property finds the booking after searching by surname or arrival date.
+    then: Continue from step 5 and record which key succeeded, so the mismatch flag captures the root cause.
+    goto_step: 5
+  - condition: The property confirms the reservation does not exist and no room is available.
+    then: Switch to NW-HTL-014 and treat it as a property unable to accommodate case.
+  - condition: The property confirms no record but has a room available at the booked rate or lower.
+    then: Ask the property to create the reservation against the voucher, then log it under step 5.
+  - condition: The property cannot be reached on any listed channel after two attempts.
+    then: Escalate to Supplier Relations with the call attempts recorded.
+  - condition: The guest is at the property and unresolved after 20 minutes.
+    then: Escalate immediately and keep the guest on the line or on hold with updates.
+
+do:
+  - Send the supplier voucher, not the guest itinerary, when proving a booking.
+  - Ask the property to search by confirmation number, surname, and arrival date before accepting "not found".
+  - Record the name of every property contact you speak to.
+  - Keep the guest updated at least every 10 minutes while they are waiting at reception.
+
+do_not:
+  - Do not create a new booking while the original still shows Confirmed; that produces a duplicate (see NW-CXL-045).
+  - Do not tell the guest the property lost the booking before the property has confirmed that in writing or on a logged call.
+  - Do not cancel the original booking to "clean up" the record.
+
+exceptions:
+  - If the supplier confirmation number is missing from the booking, treat it as a transmission failure and escalate to Supplier Relations without calling the property first.
+  - If the property is part of a group that manages reservations centrally, contact the central reservations channel shown on the Supplier Contact panel instead of the property front desk.
+
+escalation:
+  trigger: >-
+    The property cannot be reached after two attempts, refuses to reinstate a
+    booking proven by voucher, or the guest is waiting at reception with the case
+    unresolved after 20 minutes.
+  queue: Northwind Travel Supplier Relations (Tier 2)
+  contact_channel: AgentDesk Escalate button (live queue)
+  response_target: The first-response target displayed on the escalation card
+  approval_required: false
+
+customer_wording:
+  en: >-
+    Your booking is confirmed on our side and I have the supplier voucher in
+    front of me. I'm on the line with the property now to have it reinstated in
+    their system, and I'll give you the name of the person handling it along with
+    a written confirmation. Please stay at the desk while I finish this.
+  ar: >-
+    حجزك مؤكد من جهتنا وسند المورد أمامي الآن. أنا على اتصال مع مكان الإقامة
+    لإعادة تثبيته في نظامهم، وسأعطيك اسم الشخص الذي يتابع الأمر مع تأكيد كتابي.
+    أرجو البقاء عند مكتب الاستقبال حتى أنتهي من ذلك.
+
+related_procedures:
+  - NW-HTL-014
+  - NW-CXL-045
+
+version: "1.4"
+effective_date: 2026-02-10
+owner_team: Northwind Travel Supplier Relations
