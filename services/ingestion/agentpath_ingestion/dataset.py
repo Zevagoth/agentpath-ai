@@ -72,6 +72,11 @@ def build_dir() -> Path:
     return repo_root() / "data" / "synthetic" / "build"
 
 
+def screenshots_dir() -> Path:
+    """Generated screenshots plus their sidecar JSON, written by ``make screenshots``."""
+    return repo_root() / "data" / "synthetic" / "screenshots"
+
+
 def lexicon_path() -> Path:
     return repo_root() / "data" / "synthetic" / "lexicon.yaml"
 
@@ -113,8 +118,7 @@ def _assert_unique_ids(loaded: list[LoadedProcedure]) -> None:
     for item in loaded:
         if item.procedure_id in seen:
             raise DatasetError(
-                f"duplicate procedure id {item.procedure_id} in {item.path.name} "
-                f"and {seen[item.procedure_id].name}"
+                f"duplicate procedure id {item.procedure_id} in {item.path.name} and {seen[item.procedure_id].name}"
             )
         seen[item.procedure_id] = item.path
 
@@ -131,9 +135,7 @@ def _assert_related_procedures_exist(loaded: list[LoadedProcedure]) -> None:
     for item in loaded:
         for related in item.procedure.related_procedures:
             if related not in known:
-                raise DatasetError(
-                    f"{item.path.name}: related procedure {related} does not exist in the dataset"
-                )
+                raise DatasetError(f"{item.path.name}: related procedure {related} does not exist in the dataset")
 
 
 def find_forbidden_brand_tokens(text: str) -> list[str]:

@@ -39,7 +39,7 @@ services:
       # resident; at 8192 tokens it could not finish warm-up inside a 4 GB cap and
       # restart-looped 93 times. 2048 tokens is still four of our ~512-token
       # chunks per batch, which is ample: a query embeds one short string, and
-      # ingestion is a one-off pass over 31 chunks.
+      # ingestion is a one-off pass over 33 chunks.
       - --max-batch-tokens
       - "2048"
       - --max-client-batch-size

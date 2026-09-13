@@ -16,7 +16,7 @@ from __future__ import annotations
 import datetime as _dt
 import re
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -27,6 +27,37 @@ FICTIONAL_BANNER = "FICTIONAL — SYNTHETIC DEMO DATA"
 PROCEDURE_ID_PATTERN = re.compile(r"^NW-[A-Z]{3}-\d{3}$")
 
 ProcedureId = Annotated[str, Field(pattern=PROCEDURE_ID_PATTERN.pattern)]
+
+#: ``S`` + at least two digits, e.g. ``S01``. Procedure-scoped, not global.
+STEP_ID_PATTERN = re.compile(r"^S\d{2,}$")
+
+#: Separator between a procedure id and a step id in a citation token.
+STEP_CITATION_SEPARATOR = "#"
+
+
+def format_step_id(number: int) -> str:
+    """Derive the default step id for step *number*.
+
+    Zero-padded to two digits so ids sort lexicographically in the same order
+    they are executed: ``S02`` before ``S10``. Steps are capped at 40, so two
+    digits always suffice.
+    """
+    return f"S{number:02d}"
+
+
+def qualified_step_id(procedure_id: str, step_id: str) -> str:
+    """The citation token for one step, e.g. ``NW-HTL-014#S01``.
+
+    ``step_id`` is deliberately procedure-scoped, because ``S01`` on its own is
+    ambiguous: every procedure has one. The answer layer validates a model's
+    citation by looking for it verbatim in the retrieved evidence, so the token
+    it cites has to identify the procedure too — otherwise a citation invented
+    against the wrong procedure would still be found in some chunk and pass.
+
+    This is the only place the qualified form is spelled, so the renderer, the
+    visual-step records and the answer layer cannot drift apart.
+    """
+    return f"{procedure_id}{STEP_CITATION_SEPARATOR}{step_id}"
 
 
 class ProductLine(StrEnum):
@@ -92,11 +123,20 @@ class Step(BaseModel):
     at. In Stage 2 these fields drive screenshot generation and let a retrieved
     step be shown next to its original image; in this session they are already
     useful retrieval signal (agents search for button names).
+
+    ``step_id`` is the stable handle an answer cites. It defaults to ``S{number}``
+    so the five existing procedures need no editing, but it can be pinned
+    explicitly in YAML. That matters later: renumbering a procedure would
+    otherwise silently repoint every citation that was already given to an agent.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     number: int = Field(ge=1, le=40)
+    step_id: str = Field(
+        default="",
+        description="Procedure-scoped stable id, e.g. 'S01'. Derived from number when omitted.",
+    )
     instruction: str = Field(min_length=10)
     instruction_ar: str | None = Field(default=None, min_length=5)
     screen: str | None = Field(default=None, description="AgentDesk screen name, e.g. 'Booking Detail'")
@@ -106,6 +146,29 @@ class Step(BaseModel):
         default=None,
         description="Screenshot template id, rendered in Stage 2. Absent for text-only steps.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_step_id_from_number(cls, data: Any) -> Any:
+        """Fill ``step_id`` from ``number`` unless the YAML pinned one.
+
+        Runs before field validation so an explicit value always wins, and so
+        the derivation is a property of the model rather than of the loader —
+        a ``Step`` built in Python gets the same id as one read from YAML.
+        """
+        if not isinstance(data, dict) or data.get("step_id"):
+            return data
+        number = data.get("number")
+        if not isinstance(number, int) or isinstance(number, bool):
+            return data
+        return {**data, "step_id": format_step_id(number)}
+
+    @field_validator("step_id")
+    @classmethod
+    def _step_id_is_well_formed(cls, value: str) -> str:
+        if not STEP_ID_PATTERN.fullmatch(value):
+            raise ValueError(f"step_id {value!r} must look like 'S01' (S followed by at least two digits)")
+        return value
 
 
 class DecisionBranch(BaseModel):
@@ -199,6 +262,19 @@ class Procedure(BaseModel):
         numbers = [step.number for step in self.steps]
         if numbers != list(range(1, len(numbers) + 1)):
             raise ValueError(f"steps must be numbered 1..n without gaps, got {numbers}")
+        return self
+
+    @model_validator(mode="after")
+    def _step_ids_are_unique(self) -> Procedure:
+        """Two steps sharing an id would make a citation unresolvable."""
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for step in self.steps:
+            if step.step_id in seen:
+                duplicates.append(step.step_id)
+            seen.add(step.step_id)
+        if duplicates:
+            raise ValueError(f"step_id must be unique within a procedure, repeated: {', '.join(duplicates)}")
         return self
 
     @model_validator(mode="after")

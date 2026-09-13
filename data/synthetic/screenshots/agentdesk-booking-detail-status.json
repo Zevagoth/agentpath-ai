@@ -1,0 +1,47 @@
+{
+  "screenshot_id": "agentdesk-booking-detail-status",
+  "screen_name": "Booking Detail",
+  "control_name": "Booking status chip",
+  "procedure_id": "NW-HTL-014",
+  "procedure_version": "2.1",
+  "step_order": 1,
+  "expected_result": "Status chip shows Confirmed and the stay dates match the guest's report.",
+  "image_path": "data/synthetic/screenshots/agentdesk-booking-detail-status.png",
+  "source_html_path": "data/synthetic/screens/agentdesk-booking-detail-status.html",
+  "width": 1440,
+  "height": 900,
+  "device_scale_factor": 1,
+  "bytes": 211227,
+  "sha256": "a8fc7e4b939b1e7be9093e7c0255515e97d1331f2dce1c1d3860f2886e811ee8",
+  "language": "en",
+  "language_note": "AgentDesk renders its labels in English for every agent, so control names such as \"Find equivalent stays\" stay in English even when the answer is Arabic.",
+  "watermark": "FICTIONAL — SYNTHETIC DEMO DATA",
+  "dom_text": "FICTIONAL — SYNTHETIC DEMO DATA\nTraining capture for procedure NW-HTL-014, step 1 — no real customer, booking or supplier data\nAgentDesk\nNORTHWIND TRAVEL\nCases\nCASE-DEMO-77120\nBooking Detail\nAD\nA. Demo Agent — Hotels desk\n\nCASE\n\nBooking Detail\nCase Notes\nSupplier Contact\nSupplier Log\nRelocation Finder\n\nFINANCE\n\nCost Recovery\nMessages\nBooking NW-FAKE-100482\n\nHotel booking · Verdant Quay Hotel, Aldermere Bay · sample record, synthetic data\n\nPrint\nCase notes\nBooking summary\nSynthetic record — nothing here is a live booking\nBOOKING STATUS\nConfirmed\n1\nStep 1 — this Booking status chip must read Confirmed\nBOOKING REFERENCE\nNW-FAKE-100482\nSTATUS LAST CHANGED\n02 Apr 2026, 09:14 (UTC+03)\nBOOKED BY\nNorthwind Travel — Hotels desk\nStay and room\n3 nights · 1 room\nCHECK-IN\nThu 16 Apr 2026 from 15:00\nCHECK-OUT\nSun 19 Apr 2026 until 12:00\nNIGHTS\n3 nights 16, 17 and 18 Apr 2026\nROOM TYPE\nTwin Deluxe Room Breakfast included · non-smoking\nOCCUPANCY\n2 adults SAMPLE GUEST 01 · SAMPLE GUEST 02\nCANCELLATION\nFree until 14 Apr 2026, 18:00\nProperty on the booking\nInvented property — not a real hotel\nPROPERTY\nVerdant Quay Hotel 12 Harbour Walk, Aldermere Bay (fictional destination)\nSUPPLIER CONTACT\nReception desk · +000 555 0142 (sample) Supplier ref SUP-DEMO-3391\nNights on this booking\nConfirmed with the property on 02 Apr 2026\nNIGHT\tDATE\tROOM\tNIGHT STATUS\n1\tThu 16 Apr 2026\tTwin Deluxe Room · breakfast included\tConfirmed\n2\tFri 17 Apr 2026\tTwin Deluxe Room · breakfast included\tConfirmed\n3\tSat 18 Apr 2026\tTwin Deluxe Room · breakfast included\tConfirmed\nCase\nTime-critical\nCase ID\nCASE-DEMO-77120\nOpened\n14 Apr 2026, 18:21 (UTC+03)\nChannel\nInbound call — guest\nQueue\nAccommodation Support (Tier 1)\nAssigned\nA. Demo Agent\nProcedure\nNW-HTL-014 v2.1\nWhat the guest reported\nProperty says it cannot host the stay. Guest called from the property and reports reception refused check-in. Arrival is within 48 hours, so confirm the status here before contacting the supplier.\nRecent activity\nNewest first\n14 Apr 2026, 18:21 (UTC+03)\nCase opened from inbound guest call\n02 Apr 2026, 09:14 (UTC+03)\nSupplier confirmation received — status set to Confirmed\n02 Apr 2026, 09:02 (UTC+03)\nBooking created on the Hotels desk\nAgentDesk demo build — Northwind Travel (invented company)\n|\nScreen: Booking Detail\n|\nFICTIONAL — SYNTHETIC DEMO DATA",
+  "ocr_text": null,
+  "image_description": {
+    "en": "AgentDesk Booking Detail screen for the fictional booking NW-FAKE-100482 at the invented Verdant Quay Hotel, Aldermere Bay. The Booking summary panel at the top of the main column is highlighted with an orange ring around the green Booking status chip reading Confirmed; the callout to its right is labelled step 1. Below the chip the screen shows the booking reference NW-FAKE-100482, and the Stay and room panel shows check-in Thu 16 Apr 2026, check-out Sun 19 Apr 2026, three nights, and the room type Twin Deluxe Room. Click the status chip area to confirm the status before contacting the property. The whole screen carries the watermark FICTIONAL — SYNTHETIC DEMO DATA.",
+    "ar": "شاشة تفاصيل الحجز في AgentDesk للحجز الوهمي NW-FAKE-100482 في فندق Verdant Quay المُتخيَّل في Aldermere Bay. في أعلى العمود الرئيسي، تحيط دائرة برتقالية بشريحة حالة الحجز الخضراء التي تقرأ Confirmed، والشرح المجاور لها على اليمين يحمل رقم الخطوة 1. تحت الشريحة يظهر رقم الحجز NW-FAKE-100482، وتُظهر لوحة تفاصيل الإقامة تسجيل الوصول Thu 16 Apr 2026 وتسجيل المغادرة Sun 19 Apr 2026 وثلاث ليالٍ ونوع الغرفة Twin Deluxe Room. انظر إلى شريحة الحالة وتأكد منها قبل الاتصال بمكان الإقامة. تظهر على الشاشة بالكامل العلامة FICTIONAL — SYNTHETIC DEMO DATA."
+  },
+  "highlight": {
+    "control_name": "Booking status chip",
+    "selector": "[data-agentdesk-target]",
+    "source": "Playwright boundingBox() of the control element",
+    "units": "CSS pixels, top-left origin, deviceScaleFactor 1",
+    "x": 243,
+    "y": 231.58,
+    "width": 109.25,
+    "height": 26,
+    "ring": {
+      "x": 235,
+      "y": 223.58,
+      "width": 125.25,
+      "height": 42
+    }
+  },
+  "perceptual_hash": {
+    "algorithm": "dhash-64",
+    "grid": "9x8 grayscale cell averages, horizontal comparison",
+    "hex": "1106232a0a120634",
+    "hamming_tolerance": 2
+  }
+}

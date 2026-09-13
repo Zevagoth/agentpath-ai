@@ -1,0 +1,47 @@
+{
+  "screenshot_id": "agentdesk-relocation-finder",
+  "screen_name": "Relocation Finder",
+  "control_name": "Find equivalent stays",
+  "procedure_id": "NW-HTL-014",
+  "procedure_version": "2.1",
+  "step_order": 5,
+  "expected_result": "At least one option marked Equivalent or Better is listed.",
+  "image_path": "data/synthetic/screenshots/agentdesk-relocation-finder.png",
+  "source_html_path": "data/synthetic/screens/agentdesk-relocation-finder.html",
+  "width": 1440,
+  "height": 900,
+  "device_scale_factor": 1,
+  "bytes": 226312,
+  "sha256": "ddebe6e9a6a1ac7bd9d315fbf93caeac40a47a3a25dde5da1c5baf6b2ded2c36",
+  "language": "en",
+  "language_note": "AgentDesk renders its labels in English for every agent, so control names such as \"Find equivalent stays\" stay in English even when the answer is Arabic.",
+  "watermark": "FICTIONAL — SYNTHETIC DEMO DATA",
+  "dom_text": "FICTIONAL — SYNTHETIC DEMO DATA\nTraining capture for procedure NW-HTL-014, step 5 — no real customer, booking or supplier data\nAgentDesk\nNORTHWIND TRAVEL\nCases\nCASE-DEMO-77120\nRelocation Finder\nAD\nA. Demo Agent — Hotels desk\n\nCASE\n\nBooking Detail\nCase Notes\nSupplier Contact\nSupplier Log\nRelocation Finder\n\nFINANCE\n\nCost Recovery\nMessages\nRelocation Finder — NW-FAKE-100482\n\nEquivalent-or-better stays around Verdant Quay Hotel, Aldermere Bay · sample record, synthetic data\n\nOriginal: Confirmed\nGuest at property\nOverview\nGuest\nSupplier Contact\nSupplier Log\nRelocation Finder\nCost Recovery\nSearch the affected nights\nFilters carried over from the booking · distance filter left at its default\nAFFECTED NIGHTS\n16, 17 and 18 Apr 2026 — 3 nights\nDISTANCE FROM ORIGINAL STAY\nWithin 5 km (default)\nCATEGORY\nEquivalent or better\nOCCUPANCY\n1 room · 2 adults\nFind equivalent stays\n5\nStep 5 — select Find equivalent stays, keeping the default distance filter\nResults for the affected nights\n3 stays · ranked by category match, then distance · searched 14 Apr 2026, 18:47 (UTC+03)\nLantern Court Suites\nBetter\nJunior Suite, breakfast included · 0.9 km away · all 3 nights available\nAldermere Bay waterfront (fictional) · free cancellation · supplier ref SUP-DEMO-8815\nAbove the booked category\nVerified difference goes in the Cost Recovery tab\nRebook and Link\nHarbourline Grand Stay\nEquivalent\nTwin Deluxe Room, breakfast included · 1.6 km away · all 3 nights available\nSame room category and board as the booking · supplier ref SUP-DEMO-8822\nMatches the booked category\nVerified difference goes in the Cost Recovery tab\nRebook and Link\nOld Mill Guesthouse\nLower category\nStandard Twin Room, no board · 2.4 km away · all 3 nights available\nBelow the booked category — needs the guest's recorded agreement before booking\nNot equivalent\nBlocked until the guest agrees in writing\nOnly stays inside the default distance filter are shown. Widening the search needs Accommodation Support, so escalate instead of changing the filter yourself.\nOriginal stay\nKeep open\nReference\nNW-FAKE-100482\nProperty\nVerdant Quay Hotel\nStay\nThu 16 Apr — Sun 19 Apr 2026 (3 nights)\nRoom\nTwin Deluxe Room\nSupplier log\nCannot accommodate — 14 Apr 2026, 18:42\nBefore you rebook\nNW-HTL-014 v2.1\nDo not cancel the original booking. It stays open until the linked alternative shows its own confirmation number. Get the guest's agreement on a specific option first.\nSearch radius\nDefault — within 5 km\nWider search\nNeeds Accommodation Support\nEscalate by\n14 Apr 2026, 19:12 (UTC+03)\nAgentDesk demo build — Northwind Travel (invented company)\n|\nScreen: Relocation Finder\n|\nFICTIONAL — SYNTHETIC DEMO DATA",
+  "ocr_text": null,
+  "image_description": {
+    "en": "AgentDesk Relocation Finder screen for the fictional booking NW-FAKE-100482. The search panel keeps the affected nights 16, 17 and 18 Apr 2026 and the default distance filter Within 5 km. The blue Find equivalent stays button below the filters is highlighted with an orange ring, with a step 5 callout and arrow to its left. The results panel underneath lists three invented properties: Lantern Court Suites badged Better, Harbourline Grand Stay badged Equivalent, and Old Mill Guesthouse badged Lower category. Click Find equivalent stays without changing the distance filter. The whole screen carries the watermark FICTIONAL — SYNTHETIC DEMO DATA.",
+    "ar": "شاشة أداة إيجاد البديل في AgentDesk للحجز الوهمي NW-FAKE-100482. تُبقي لوحة البحث على الليالي المتأثرة 16 و17 و18 Apr 2026 وعلى فلتر المسافة الافتراضي Within 5 km. زر Find equivalent stays الأزرق أسفل الفلاتر تحيط به دائرة برتقالية، مع شرح للخطوة 5 وسهم على يساره. تعرض لوحة النتائج أدناه ثلاثة أماكن إقامة متخيَّلة: Lantern Court Suites بشارة Better، وHarbourline Grand Stay بشارة Equivalent، وOld Mill Guesthouse بشارة Lower category. اضغط Find equivalent stays دون تغيير فلتر المسافة. تظهر على الشاشة بالكامل العلامة FICTIONAL — SYNTHETIC DEMO DATA."
+  },
+  "highlight": {
+    "control_name": "Find equivalent stays",
+    "selector": "[data-agentdesk-target]",
+    "source": "Playwright boundingBox() of the control element",
+    "units": "CSS pixels, top-left origin, deviceScaleFactor 1",
+    "x": 871.73,
+    "y": 325.08,
+    "width": 201.27,
+    "height": 32,
+    "ring": {
+      "x": 863.73,
+      "y": 317.08,
+      "width": 217.27,
+      "height": 48
+    }
+  },
+  "perceptual_hash": {
+    "algorithm": "dhash-64",
+    "grid": "9x8 grayscale cell averages, horizontal comparison",
+    "hex": "2612353506060416",
+    "hamming_tolerance": 2
+  }
+}

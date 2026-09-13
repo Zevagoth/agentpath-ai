@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentpath_ingestion.dataset import LoadedProcedure, find_forbidden_brand_tokens
-from agentpath_ingestion.schema import FICTIONAL_BANNER, Procedure
+from agentpath_ingestion.schema import FICTIONAL_BANNER, Procedure, qualified_step_id
 
 BANNER_LINE = f"> **{FICTIONAL_BANNER}** · Fictional agency *Northwind Travel* · Fictional console *AgentDesk*"
 
@@ -76,7 +76,21 @@ def _render_steps(procedure: Procedure) -> list[str]:
             context.append(f"Control: {step.ui_element}")
         if context:
             heading += " — " + " — ".join(context)
-        lines += ["", heading, "", step.instruction.strip()]
+        # The citation token sits on its own line directly under the heading, in
+        # backticks, following the "**Label:** value" shape the rest of the
+        # document already uses. Three properties are being bought here:
+        # it survives Markdown rendering untouched, it is greppable as an exact
+        # substring (which is how the answer layer proves a citation is real),
+        # and it stays adjacent to the heading so a chunk that contains the step
+        # heading contains the id that names it.
+        lines += [
+            "",
+            heading,
+            "",
+            f"**Step ID:** `{qualified_step_id(procedure.procedure_id, step.step_id)}`",
+            "",
+            step.instruction.strip(),
+        ]
         if step.instruction_ar:
             lines += ["", f"**عربي:** {step.instruction_ar.strip()}"]
         if step.expected_result:
@@ -141,8 +155,7 @@ def render_markdown(procedure: Procedure) -> str:
         "",
         "## Also known as (search terms)",
         "",
-        "Agents rarely type the official title. These are the phrasings this "
-        "procedure should also be found by:",
+        "Agents rarely type the official title. These are the phrasings this procedure should also be found by:",
         "",
         f"- **English:** {'; '.join(procedure.synonyms.en)}",
         f"- **العربية:** {'؛ '.join(procedure.synonyms.ar)}",

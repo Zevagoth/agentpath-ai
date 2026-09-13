@@ -72,7 +72,8 @@ until retrieval is working and measured. That condition is now met.
 
 - `agentpath-ingest build|ingest|verify`, idempotent via a content hash in
   document metadata, parse polling with RAGFlow's own progress messages
-- Verified: 5 documents, 31 chunks, 32 s
+- Verified: 5 documents, 31 chunks, 32 s (Stage 2A T3 re-recorded this at 33
+  chunks once step ids entered the rendered text)
 
 ### Task 6 - Retriever port, RAGFlowRetriever, query understanding `[x]`
 

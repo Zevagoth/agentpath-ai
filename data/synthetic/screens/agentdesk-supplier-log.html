@@ -1,0 +1,390 @@
+<!doctype html>
+<!--
+  FICTIONAL — SYNTHETIC DEMO DATA
+
+  AgentDesk "Supplier Log" screen, as referenced by step 4 of procedure
+  NW-HTL-014. "Northwind Travel" and "AgentDesk" are invented; every reference,
+  name, property, address and phone number on this screen is a placeholder.
+
+  Self-contained by contract: one local stylesheet, inline SVG only, no font,
+  image, script or network reference. Every timestamp is a hard-coded literal so
+  the render never depends on the clock.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>AgentDesk — Supplier Log — NW-FAKE-100482</title>
+    <link rel="stylesheet" href="agentdesk.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <div class="watermark">
+        <span data-agentdesk-watermark>FICTIONAL — SYNTHETIC DEMO DATA</span>
+        <span class="watermark-note"
+          >Training capture for procedure NW-HTL-014, step 4 — no real customer, booking or supplier
+          data</span
+        >
+      </div>
+
+      <div class="topbar">
+        <span class="product">AgentDesk <span class="agency">NORTHWIND TRAVEL</span></span>
+        <span class="crumbs">
+          <span>Cases</span>
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            <path d="M4 2 L8 6 L4 10" fill="none" stroke="currentColor" stroke-width="1.6" />
+          </svg>
+          <span>CASE-DEMO-77120</span>
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            <path d="M4 2 L8 6 L4 10" fill="none" stroke="currentColor" stroke-width="1.6" />
+          </svg>
+          <span>Supplier Log</span>
+        </span>
+        <span class="spacer"></span>
+        <span class="agent-badge">
+          <span class="initials">AD</span>
+          <span>A. Demo Agent — Hotels desk</span>
+        </span>
+      </div>
+
+      <div class="body">
+        <nav class="sidenav">
+          <p class="nav-group">CASE</p>
+          <ul>
+            <li>
+              <span class="glyph">
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                  <rect
+                    x="2"
+                    y="1.5"
+                    width="10"
+                    height="11"
+                    rx="1.5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.4"
+                  />
+                  <path d="M4.5 5h5M4.5 7.5h5M4.5 10h3" stroke="currentColor" stroke-width="1.2" />
+                </svg>
+              </span>
+              <span>Booking Detail</span>
+            </li>
+            <li>
+              <span class="glyph">
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                  <path d="M2 3.5h10v7H2z" fill="none" stroke="currentColor" stroke-width="1.4" />
+                  <path d="M4 6h6M4 8.5h4" stroke="currentColor" stroke-width="1.2" />
+                </svg>
+              </span>
+              <span>Case Notes</span>
+            </li>
+            <li>
+              <span class="glyph">
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                  <path
+                    d="M3 2.5c0 5 3.5 8.5 8.5 8.5v-2l-2.5-1-1.3 1.3A8 8 0 0 1 5.2 6.8L6.5 5.5 5.5 3H3z"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.3"
+                  />
+                </svg>
+              </span>
+              <span>Supplier Contact</span>
+            </li>
+            <li class="current">
+              <span class="glyph">
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                  <path d="M2.5 3h9M2.5 7h9M2.5 11h6" stroke="currentColor" stroke-width="1.4" />
+                </svg>
+              </span>
+              <span>Supplier Log</span>
+            </li>
+            <li>
+              <span class="glyph">
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                  <circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.4" />
+                  <path d="M7 4.5v5M4.5 7h5" stroke="currentColor" stroke-width="1.2" />
+                </svg>
+              </span>
+              <span>Relocation Finder</span>
+            </li>
+          </ul>
+          <p class="nav-group">FINANCE</p>
+          <ul>
+            <li>
+              <span class="glyph">
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                  <rect
+                    x="2"
+                    y="4"
+                    width="10"
+                    height="7"
+                    rx="1.2"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.4"
+                  />
+                  <path d="M2 6.5h10" stroke="currentColor" stroke-width="1.2" />
+                </svg>
+              </span>
+              <span>Cost Recovery</span>
+            </li>
+            <li>
+              <span class="glyph">
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                  <path d="M2 3.5h10v7H2z" fill="none" stroke="currentColor" stroke-width="1.4" />
+                  <path d="M2 3.5 7 8l5-4.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+                </svg>
+              </span>
+              <span>Messages</span>
+            </li>
+          </ul>
+        </nav>
+
+        <main class="main">
+          <div class="page-head">
+            <div>
+              <h1>Supplier Log — NW-FAKE-100482</h1>
+              <p class="subtitle">
+                Every contact attempt with Verdant Quay Hotel, newest first · sample record,
+                synthetic data
+              </p>
+            </div>
+            <div class="head-actions">
+              <span class="chip status-confirmed"><span class="dot"></span>Booking: Confirmed</span>
+              <span class="chip alert">Guest at property</span>
+            </div>
+          </div>
+
+          <div class="tabs">
+            <span class="tab">Overview</span>
+            <span class="tab">Guest</span>
+            <span class="tab">Supplier Contact</span>
+            <span class="tab active">Supplier Log</span>
+            <span class="tab">Cost Recovery</span>
+            <span class="tab">Messages</span>
+          </div>
+
+          <div class="columns">
+            <div class="col-main">
+              <section class="panel">
+                <header>
+                  <h2>Contact history</h2>
+                  <span class="panel-note"
+                    >3 entries · newest first · timestamps are set by AgentDesk and cannot be
+                    edited</span
+                  >
+                </header>
+                <div class="panel-body">
+                  <div
+                    class="stack-row"
+                    style="justify-content: flex-end; margin-bottom: 6px; min-height: 36px"
+                  >
+                    <span class="hl-anchor" style="display: inline-flex">
+                      <span class="btn primary" data-agentdesk-target>
+                        <span class="glyph">
+                          <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true">
+                            <path
+                              d="M6.5 2.2v8.6M2.2 6.5h8.6"
+                              stroke="currentColor"
+                              stroke-width="1.8"
+                            />
+                          </svg>
+                        </span>
+                        Log supplier contact
+                      </span>
+                      <span class="hl-ring" style="inset: -8px"></span>
+                      <svg
+                        class="hl-arrow"
+                        style="right: calc(100% + 14px); top: 9px"
+                        width="46"
+                        height="14"
+                        viewBox="0 0 46 14"
+                        aria-hidden="true"
+                      >
+                        <path d="M0 7 H32" stroke="currentColor" stroke-width="3" fill="none" />
+                        <path d="M32 1 L43 7 L32 13 Z" fill="currentColor" />
+                      </svg>
+                      <span
+                        class="hl-callout"
+                        style="right: calc(100% + 66px); top: -9px; width: 424px"
+                      >
+                        <span class="step-no">4</span>
+                        <span class="callout-text"
+                          >Step 4 — use <em>Log supplier contact</em> for the outcome “Cannot
+                          accommodate”</span
+                        >
+                      </span>
+                    </span>
+                  </div>
+                </div>
+                <div class="panel-body tight">
+                  <table class="grid fixed">
+                    <thead>
+                      <tr>
+                        <th class="nowrap" style="width: 168px">TIMESTAMP</th>
+                        <th class="nowrap" style="width: 112px">CHANNEL</th>
+                        <th style="width: 168px">OUTCOME</th>
+                        <th>DETAIL RECORDED</th>
+                        <th style="width: 98px">LOGGED BY</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr class="fresh">
+                        <td class="nowrap"><span class="stamp">14 Apr 2026, 18:42</span></td>
+                        <td class="nowrap">Outbound call</td>
+                        <td><span class="badge outcome">Cannot accommodate</span></td>
+                        <td>
+                          Spoke to the Front Office Supervisor (SUPPLIER CONTACT 01). No room is
+                          available for any of the 3 booked nights.
+                          <span class="detail"
+                            >Nights affected: 16, 17 and 18 Apr 2026 · guest is at reception ·
+                            refusal confirmed by the property itself.</span
+                          >
+                        </td>
+                        <td>A. Demo Agent</td>
+                      </tr>
+                      <tr>
+                        <td class="nowrap"><span class="stamp">14 Apr 2026, 18:29</span></td>
+                        <td class="nowrap">Outbound call</td>
+                        <td><span class="badge outcome neutral">No answer</span></td>
+                        <td>
+                          Reception line rang out after 90 seconds. Attempt recorded, no contact
+                          made.
+                          <span class="detail">Dialled +000 555 0142 (sample).</span>
+                        </td>
+                        <td>A. Demo Agent</td>
+                      </tr>
+                      <tr>
+                        <td class="nowrap"><span class="stamp">02 Apr 2026, 09:14</span></td>
+                        <td class="nowrap">Email</td>
+                        <td><span class="badge outcome neutral">Booking acknowledged</span></td>
+                        <td>
+                          Rooming list acknowledged and the Twin Deluxe Room confirmed for 16–19 Apr
+                          2026.
+                          <span class="detail">Supplier ref SUP-DEMO-3391.</span>
+                        </td>
+                        <td>System</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section class="panel">
+                <header>
+                  <h2>Detail captured in step 3, pasted into this entry</h2>
+                  <span class="panel-note">Read-only once logged</span>
+                </header>
+                <div class="panel-body">
+                  <div class="fields">
+                    <div class="field">
+                      <span class="label">PROPERTY CONTACT</span>
+                      <span class="value">SUPPLIER CONTACT 01</span>
+                      <span class="value secondary">Front Office Supervisor</span>
+                    </div>
+                    <div class="field">
+                      <span class="label">STATED REASON</span>
+                      <span class="value secondary"
+                        >Property fully committed for the booked dates</span
+                      >
+                    </div>
+                    <div class="field">
+                      <span class="label">NIGHTS AFFECTED</span>
+                      <span class="value">All 3 nights</span>
+                      <span class="value secondary">16, 17 and 18 Apr 2026</span>
+                    </div>
+                    <div class="field">
+                      <span class="label">GUEST LOCATION</span>
+                      <span class="value">At the property now</span>
+                    </div>
+                    <div class="field">
+                      <span class="label">CONFIRMED BY</span>
+                      <span class="value secondary">The property, on the recorded call</span>
+                    </div>
+                    <div class="field">
+                      <span class="label">ATTACHMENTS</span>
+                      <span class="value secondary">Call recording ref REC-DEMO-5540</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <div class="col-side">
+              <section class="panel">
+                <header>
+                  <h2>Booking</h2>
+                  <span class="panel-note">Sample record</span>
+                </header>
+                <div class="panel-body">
+                  <ul class="kv-list">
+                    <li><span class="k">Reference</span><span class="v">NW-FAKE-100482</span></li>
+                    <li><span class="k">Property</span><span class="v">Verdant Quay Hotel</span></li>
+                    <li>
+                      <span class="k">Stay</span
+                      ><span class="v">Thu 16 Apr — Sun 19 Apr 2026 (3 nights)</span>
+                    </li>
+                    <li><span class="k">Room</span><span class="v">Twin Deluxe Room</span></li>
+                    <li><span class="k">Case ID</span><span class="v">CASE-DEMO-77120</span></li>
+                  </ul>
+                </div>
+              </section>
+
+              <section class="panel">
+                <header>
+                  <h2>Next in the procedure</h2>
+                  <span class="panel-note">NW-HTL-014 v2.1</span>
+                </header>
+                <div class="panel-body">
+                  <div class="notice">
+                    <span class="glyph">
+                      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                        <circle
+                          cx="7"
+                          cy="7"
+                          r="5.4"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                        />
+                        <path d="M7 6.2v4" stroke="currentColor" stroke-width="1.4" />
+                        <circle cx="7" cy="4.2" r="0.85" fill="currentColor" />
+                      </svg>
+                    </span>
+                    <span>
+                      <strong>Escalation clock starts here.</strong> The guest is at the property, so
+                      if no alternative is confirmed within 30 minutes of this log entry, escalate
+                      without waiting for further supplier replies.
+                    </span>
+                  </div>
+                  <ul class="kv-list" style="margin-top: 10px">
+                    <li>
+                      <span class="k">Logged at</span
+                      ><span class="v">14 Apr 2026, 18:42 (UTC+03)</span>
+                    </li>
+                    <li>
+                      <span class="k">Escalate by</span
+                      ><span class="v">14 Apr 2026, 19:12 (UTC+03)</span>
+                    </li>
+                    <li>
+                      <span class="k">Then</span
+                      ><span class="v">Step 5 — Relocation Finder</span>
+                    </li>
+                  </ul>
+                </div>
+              </section>
+            </div>
+          </div>
+        </main>
+      </div>
+
+      <div class="footer">
+        <span>AgentDesk demo build — Northwind Travel (invented company)</span>
+        <span class="sep">|</span>
+        <span>Screen: Supplier Log</span>
+        <span class="sep">|</span>
+        <span>FICTIONAL — SYNTHETIC DEMO DATA</span>
+      </div>
+    </div>
+  </body>
+</html>

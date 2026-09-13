@@ -1,0 +1,47 @@
+{
+  "screenshot_id": "agentdesk-supplier-log",
+  "screen_name": "Supplier Log",
+  "control_name": "Log supplier contact",
+  "procedure_id": "NW-HTL-014",
+  "procedure_version": "2.1",
+  "step_order": 4,
+  "expected_result": "A timestamped supplier log entry exists on the booking.",
+  "image_path": "data/synthetic/screenshots/agentdesk-supplier-log.png",
+  "source_html_path": "data/synthetic/screens/agentdesk-supplier-log.html",
+  "width": 1440,
+  "height": 900,
+  "device_scale_factor": 1,
+  "bytes": 216161,
+  "sha256": "662d128216632e094fd314dd917d2a763b6689b309036b351c481a6ff4fe8b45",
+  "language": "en",
+  "language_note": "AgentDesk renders its labels in English for every agent, so control names such as \"Find equivalent stays\" stay in English even when the answer is Arabic.",
+  "watermark": "FICTIONAL — SYNTHETIC DEMO DATA",
+  "dom_text": "FICTIONAL — SYNTHETIC DEMO DATA\nTraining capture for procedure NW-HTL-014, step 4 — no real customer, booking or supplier data\nAgentDesk\nNORTHWIND TRAVEL\nCases\nCASE-DEMO-77120\nSupplier Log\nAD\nA. Demo Agent — Hotels desk\n\nCASE\n\nBooking Detail\nCase Notes\nSupplier Contact\nSupplier Log\nRelocation Finder\n\nFINANCE\n\nCost Recovery\nMessages\nSupplier Log — NW-FAKE-100482\n\nEvery contact attempt with Verdant Quay Hotel, newest first · sample record, synthetic data\n\nBooking: Confirmed\nGuest at property\nOverview\nGuest\nSupplier Contact\nSupplier Log\nCost Recovery\nMessages\nContact history\n3 entries · newest first · timestamps are set by AgentDesk and cannot be edited\nLog supplier contact\n4\nStep 4 — use Log supplier contact for the outcome “Cannot accommodate”\nTIMESTAMP\tCHANNEL\tOUTCOME\tDETAIL RECORDED\tLOGGED BY\n14 Apr 2026, 18:42\tOutbound call\tCannot accommodate\tSpoke to the Front Office Supervisor (SUPPLIER CONTACT 01). No room is available for any of the 3 booked nights.\nNights affected: 16, 17 and 18 Apr 2026 · guest is at reception · refusal confirmed by the property itself.\n\tA. Demo Agent\n14 Apr 2026, 18:29\tOutbound call\tNo answer\tReception line rang out after 90 seconds. Attempt recorded, no contact made.\nDialled +000 555 0142 (sample).\n\tA. Demo Agent\n02 Apr 2026, 09:14\tEmail\tBooking acknowledged\tRooming list acknowledged and the Twin Deluxe Room confirmed for 16–19 Apr 2026.\nSupplier ref SUP-DEMO-3391.\n\tSystem\nDetail captured in step 3, pasted into this entry\nRead-only once logged\nPROPERTY CONTACT\nSUPPLIER CONTACT 01 Front Office Supervisor\nSTATED REASON\nProperty fully committed for the booked dates\nNIGHTS AFFECTED\nAll 3 nights 16, 17 and 18 Apr 2026\nGUEST LOCATION\nAt the property now\nCONFIRMED BY\nThe property, on the recorded call\nATTACHMENTS\nCall recording ref REC-DEMO-5540\nBooking\nSample record\nReference\nNW-FAKE-100482\nProperty\nVerdant Quay Hotel\nStay\nThu 16 Apr — Sun 19 Apr 2026 (3 nights)\nRoom\nTwin Deluxe Room\nCase ID\nCASE-DEMO-77120\nNext in the procedure\nNW-HTL-014 v2.1\nEscalation clock starts here. The guest is at the property, so if no alternative is confirmed within 30 minutes of this log entry, escalate without waiting for further supplier replies.\nLogged at\n14 Apr 2026, 18:42 (UTC+03)\nEscalate by\n14 Apr 2026, 19:12 (UTC+03)\nThen\nStep 5 — Relocation Finder\nAgentDesk demo build — Northwind Travel (invented company)\n|\nScreen: Supplier Log\n|\nFICTIONAL — SYNTHETIC DEMO DATA",
+  "ocr_text": null,
+  "image_description": {
+    "en": "AgentDesk Supplier Log screen for the fictional booking NW-FAKE-100482. The blue Log supplier contact button sits at the top right of the Contact history panel and is highlighted with an orange ring, with a step 4 callout and arrow to its left. The table below already holds the timestamped entry 14 Apr 2026, 18:42 (UTC+03) with the red outcome badge Cannot accommodate, recording that the property has no room for any of the three booked nights. Click Log supplier contact to add such an entry. The whole screen carries the watermark FICTIONAL — SYNTHETIC DEMO DATA.",
+    "ar": "شاشة سجل المورد في AgentDesk للحجز الوهمي NW-FAKE-100482. يقع زر Log supplier contact الأزرق في أعلى يمين لوحة سجل الاتصالات وتحيط به دائرة برتقالية، مع شرح للخطوة 4 وسهم على يساره. يحتوي الجدول أدناه على قيد بطابع زمني 14 Apr 2026, 18:42 (UTC+03) مع شارة النتيجة الحمراء Cannot accommodate، وهي تسجّل أن مكان الإقامة لا يملك غرفة لأي من الليالي الثلاث المحجوزة. اضغط Log supplier contact لإضافة قيد مماثل. تظهر على الشاشة بالكامل العلامة FICTIONAL — SYNTHETIC DEMO DATA."
+  },
+  "highlight": {
+    "control_name": "Log supplier contact",
+    "selector": "[data-agentdesk-target]",
+    "source": "Playwright boundingBox() of the control element",
+    "units": "CSS pixels, top-left origin, deviceScaleFactor 1",
+    "x": 878.66,
+    "y": 254.39,
+    "width": 194.34,
+    "height": 32,
+    "ring": {
+      "x": 870.66,
+      "y": 246.39,
+      "width": 210.34,
+      "height": 48
+    }
+  },
+  "perceptual_hash": {
+    "algorithm": "dhash-64",
+    "grid": "9x8 grayscale cell averages, horizontal comparison",
+    "hex": "06123533321a0a10",
+    "hamming_tolerance": 2
+  }
+}

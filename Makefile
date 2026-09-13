@@ -33,8 +33,12 @@ install-web: ## Install web app dependencies
 	@echo "web dependencies installed. Browser tests also need: make install-web-browsers"
 
 .PHONY: install-web-browsers
-install-web-browsers: ## Download the Chromium build Playwright uses (~150 MB)
+install-web-browsers: ## Download the Chromium build Playwright uses (~174 MB)
 	@cd apps/web && npx playwright install chromium
+
+.PHONY: browser-check
+browser-check: ## Report which browser Playwright will use, and prove it launches
+	@cd apps/web && node scripts/browser-check.mjs
 
 .PHONY: web-build
 web-build: ## Production build of the web app
@@ -89,6 +93,14 @@ ingest: ## Ingest the rendered procedures into RAGFlow
 .PHONY: ingest-verify
 ingest-verify: ## Show ingestion status and chunk counts
 	@uv run agentpath-ingest verify
+
+.PHONY: screenshots
+screenshots: ## Render the synthetic AgentDesk screens to PNG + sidecar JSON
+	@cd apps/web && node scripts/generate-screenshots.mjs
+
+.PHONY: screenshots-check
+screenshots-check: ## Re-render the screens and verify them without writing
+	@cd apps/web && node scripts/generate-screenshots.mjs --check
 
 .PHONY: api
 api: ## Run the FastAPI service on 127.0.0.1:8000

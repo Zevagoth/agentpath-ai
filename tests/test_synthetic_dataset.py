@@ -16,8 +16,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from pydantic import ValidationError
-
 from agentpath_ingestion.cli import main as cli_main
 from agentpath_ingestion.dataset import (
     DatasetError,
@@ -28,7 +26,14 @@ from agentpath_ingestion.dataset import (
     procedures_dir,
 )
 from agentpath_ingestion.render import build_metadata, render, render_markdown, write_build
-from agentpath_ingestion.schema import FICTIONAL_BANNER, Procedure, ProductLine
+from agentpath_ingestion.schema import (
+    FICTIONAL_BANNER,
+    STEP_ID_PATTERN,
+    Procedure,
+    ProductLine,
+    qualified_step_id,
+)
+from pydantic import ValidationError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_SESSION_ONE_IDS = {"NW-HTL-014", "NW-HTL-021", "NW-CXL-032", "NW-CXL-045", "NW-REF-018"}
@@ -239,17 +244,97 @@ def test_schema_forbids_unknown_fields() -> None:
         Procedure.model_validate(payload)
 
 
+# --------------------------------------------------------------------------- #
+# Step identity
+# --------------------------------------------------------------------------- #
+
+
+def test_step_id_defaults_to_the_zero_padded_step_number() -> None:
+    """Derived, not hand-written, so the five existing procedures need no editing."""
+    procedure = Procedure.model_validate(_minimal_procedure_payload())
+    assert [step.step_id for step in procedure.steps] == ["S01", "S02", "S03"]
+
+
+def test_step_ids_sort_in_execution_order(dataset: list[LoadedProcedure]) -> None:
+    """Zero padding is the point: 'S02' must sort before 'S10', not after."""
+    procedure = next(i.procedure for i in dataset if i.procedure_id == "NW-HTL-014")
+    ids = [step.step_id for step in procedure.steps]
+    assert len(ids) == 10
+    assert sorted(ids) == ids
+    assert ids[-1] == "S10"
+
+
+def test_step_id_can_be_pinned_explicitly_in_yaml() -> None:
+    """Renumbering a procedure must not be able to repoint an existing citation."""
+    payload = _minimal_procedure_payload()
+    payload["steps"][1]["step_id"] = "S07"
+    procedure = Procedure.model_validate(payload)
+    assert [step.step_id for step in procedure.steps] == ["S01", "S07", "S03"]
+    assert procedure.steps[1].number == 2
+
+
+def test_step_id_survives_a_round_trip_through_yaml(tmp_path: Path) -> None:
+    payload = _minimal_procedure_payload()
+    payload["steps"][0]["step_id"] = "S99"
+    (tmp_path / "NW-TST-001.yaml").write_text(yaml.safe_dump(payload, allow_unicode=True), encoding="utf-8")
+    (loaded,) = load_procedures(tmp_path)
+    assert loaded.procedure.steps[0].step_id == "S99"
+
+
+def test_step_id_derivation_is_stable_across_reloads() -> None:
+    first = Procedure.model_validate(_minimal_procedure_payload())
+    second = Procedure.model_validate(_minimal_procedure_payload())
+    assert [s.step_id for s in first.steps] == [s.step_id for s in second.steps]
+
+
+@pytest.mark.parametrize("bad_id", ["1", "S1", "step-1", "s01", "S01a"])
+def test_schema_rejects_a_malformed_explicit_step_id(bad_id: str) -> None:
+    payload = _minimal_procedure_payload()
+    payload["steps"][0]["step_id"] = bad_id
+    with pytest.raises(ValidationError, match="step_id"):
+        Procedure.model_validate(payload)
+
+
+@pytest.mark.parametrize("empty", ["", None])
+def test_an_empty_step_id_means_use_the_derived_one(empty: str | None) -> None:
+    """``step_id:`` written with no value is a request for the default, not an error."""
+    payload = _minimal_procedure_payload()
+    payload["steps"][0]["step_id"] = empty
+    procedure = Procedure.model_validate(payload)
+    assert procedure.steps[0].step_id == "S01"
+
+
+def test_schema_rejects_duplicate_step_ids() -> None:
+    """A repeated id would make a citation point at two different instructions."""
+    payload = _minimal_procedure_payload()
+    payload["steps"][1]["step_id"] = "S01"
+    with pytest.raises(ValidationError, match="unique"):
+        Procedure.model_validate(payload)
+
+
+def test_qualified_step_id_names_the_procedure() -> None:
+    """'S01' alone is ambiguous: every procedure has one."""
+    assert qualified_step_id("NW-HTL-014", "S01") == "NW-HTL-014#S01"
+
+
+def test_every_step_in_the_dataset_has_a_stable_id(dataset: list[LoadedProcedure]) -> None:
+    for item in dataset:
+        ids = [step.step_id for step in item.procedure.steps]
+        assert len(set(ids)) == len(ids), item.procedure_id
+        assert all(STEP_ID_PATTERN.fullmatch(step_id) for step_id in ids), item.procedure_id
+
+
 def test_loader_reports_the_offending_file(tmp_path: Path) -> None:
     bad = tmp_path / "NW-BAD-001.yaml"
     bad.write_text("procedure_id: NW-BAD-001\n", encoding="utf-8")
-    with pytest.raises(DatasetError, match="NW-BAD-001.yaml"):
+    with pytest.raises(DatasetError, match=r"NW-BAD-001\.yaml"):
         load_procedure_file(bad)
 
 
 def test_loader_rejects_filename_id_mismatch(tmp_path: Path) -> None:
     payload = _minimal_procedure_payload()
     (tmp_path / "wrong-name.yaml").write_text(yaml.safe_dump(payload, allow_unicode=True), encoding="utf-8")
-    with pytest.raises(DatasetError, match="file name should be NW-TST-001.yaml"):
+    with pytest.raises(DatasetError, match=r"file name should be NW-TST-001\.yaml"):
         load_procedures(tmp_path)
 
 
@@ -313,6 +398,41 @@ def test_rendered_steps_are_numbered_and_carry_expected_results(dataset: list[Lo
         assert f"### Step {step.number}" in markdown
         assert step.instruction.strip()[:40] in markdown
     assert "**Expected result:**" in markdown
+
+
+def test_every_step_id_appears_verbatim_in_the_rendered_document(
+    dataset: list[LoadedProcedure],
+) -> None:
+    """The citation check downstream is a substring search over the evidence text.
+
+    If the token an answer cites is not literally present in the rendered
+    document, a valid citation is indistinguishable from an invented one.
+    """
+    for item in dataset:
+        markdown = render_markdown(item.procedure)
+        for step in item.procedure.steps:
+            token = qualified_step_id(item.procedure_id, step.step_id)
+            assert f"**Step ID:** `{token}`" in markdown, token
+
+
+def test_the_step_id_line_sits_directly_under_its_heading(dataset: list[LoadedProcedure]) -> None:
+    """The id has to travel with the heading it names, whatever the chunk boundary."""
+    item = next(i for i in dataset if i.procedure_id == "NW-HTL-014")
+    lines = render_markdown(item.procedure).splitlines()
+    headings = [index for index, line in enumerate(lines) if line.startswith("### Step ")]
+    assert len(headings) == len(item.procedure.steps)
+    for index, step in zip(headings, item.procedure.steps, strict=True):
+        token = qualified_step_id(item.procedure_id, step.step_id)
+        assert lines[index + 2] == f"**Step ID:** `{token}`"
+
+
+def test_rendered_step_ids_are_unique_within_a_document(dataset: list[LoadedProcedure]) -> None:
+    """An ambiguous token would let a citation resolve to the wrong instruction."""
+    for item in dataset:
+        markdown = render_markdown(item.procedure)
+        for step in item.procedure.steps:
+            token = qualified_step_id(item.procedure_id, step.step_id)
+            assert markdown.count(token) == 1, token
 
 
 def test_rendered_screenshot_steps_reference_their_template(dataset: list[LoadedProcedure]) -> None:
@@ -398,9 +518,7 @@ def test_cli_build_writes_to_a_target_directory(tmp_path: Path, capsys: pytest.C
     assert (tmp_path / "manifest.json").is_file()
 
 
-def test_cli_validate_fails_cleanly_on_a_broken_dataset(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_validate_fails_cleanly_on_a_broken_dataset(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "NW-BAD-001.yaml").write_text("procedure_id: NW-BAD-001\n", encoding="utf-8")
     assert cli_main(["validate", "--source", str(tmp_path)]) == 1
     assert "dataset invalid" in capsys.readouterr().err
