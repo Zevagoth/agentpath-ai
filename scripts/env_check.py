@@ -632,16 +632,17 @@ def render_markdown(report: Report) -> str:
         )
 
     if report.ollama.get("reachable"):
+        # Only the count is reported. Which models a developer keeps locally is
+        # their business and has no bearing on whether the stack can run.
+        model_count = len(report.ollama.get("models", []))
         rows += [
             "",
             "## Ollama",
             "",
             f"- Reachable at `{report.ollama['url']}`",
             f"- Listening on: {', '.join(report.ollama.get('listen_addresses') or ['unknown'])}",
-            "- Models already present (untouched by AgentPath AI):",
+            f"- {model_count} pre-existing model(s), untouched by AgentPath AI",
         ]
-        for model in report.ollama.get("models", []):
-            rows.append(f"  - `{model['name']}` ({model['size_gb']} GB)")
 
     rows += ["", "## Gates", "", "| Gate | Status | Detail | Remedy |", "| --- | --- | --- | --- |"]
     for check in report.checks:
