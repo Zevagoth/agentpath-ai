@@ -55,7 +55,7 @@ MIN_DOCKER_VERSION = (24, 0, 0)
 PORT_PLAN: dict[int, dict[str, Any]] = {
     3000: {"owner": "apps/web (Next.js dev server)", "required": True},
     8000: {"owner": "apps/api (FastAPI)", "required": True},
-    8081: {"owner": "RAGFlow web UI (nginx; 8080 was busy on this host)", "required": True},
+    8081: {"owner": "RAGFlow web UI (nginx; 8080 is left free for other tools)", "required": True},
     9380: {"owner": "RAGFlow HTTP API", "required": True},
     9381: {"owner": "RAGFlow admin server", "required": True},
     7997: {"owner": "AgentPath reranker sidecar (TEI, bge-reranker-v2-m3)", "required": True},
@@ -354,15 +354,72 @@ def ollama_listen_addresses() -> list[str]:
     return addresses
 
 
+def agentpath_published_ports() -> set[int]:
+    """Host ports already published by AgentPath's own containers.
+
+    Without this, running ``make check`` after ``make ragflow-up`` reports the
+    stack's own ports as conflicts and declares the machine NOT READY, which is
+    both wrong and the kind of false alarm that trains people to ignore checks.
+    """
+    out = run(["docker", "ps", "--filter", "name=agentpath", "--format", "{{.Ports}}"])
+    if not out:
+        return set()
+
+    ports: set[int] = set()
+    # Docker collapses consecutive publications into ranges, so a single mapping
+    # can read either "127.0.0.1:6379->6379/tcp" or
+    # "127.0.0.1:9380-9384->9380-9384/tcp". Missing the range form silently marks
+    # the stack's own ports as conflicts.
+    pattern = re.compile(r"(?:\d+\.\d+\.\d+\.\d+|\[?::\]?):(\d+)(?:-(\d+))?->")
+    for match in pattern.finditer(out):
+        start = int(match.group(1))
+        end = int(match.group(2)) if match.group(2) else start
+        if end < start or end - start > 64:
+            # Nonsense or absurdly wide: ignore rather than invent ownership.
+            continue
+        ports.update(range(start, end + 1))
+    return ports
+
+
+def agentpath_owns_host_port(port: int) -> bool:
+    """Whether an AgentPath process (not a container) is serving this port.
+
+    The API and web app run as host processes, so container inspection cannot see
+    them. Both identify themselves in their response, which is a more reliable
+    signal than matching process names.
+    """
+    if port == 8000:
+        payload = _http_get_text(f"http://127.0.0.1:{port}/health")
+        return bool(payload and '"mode"' in payload and "agentpath" in payload.lower())
+    if port == 3000:
+        payload = _http_get_text(f"http://127.0.0.1:{port}/")
+        return bool(payload and "AgentPath AI" in payload)
+    return False
+
+
+def _http_get_text(url: str, timeout: int = 3) -> str | None:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return response.read(20000).decode("utf-8", errors="replace")
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return None
+
+
 def collect_ports() -> list[dict[str, Any]]:
+    owned = agentpath_published_ports()
     rows = []
     for port, meta in sorted(PORT_PLAN.items()):
+        busy = port_is_busy(port)
+        held = busy and (port in owned or agentpath_owns_host_port(port))
         rows.append(
             {
                 "port": port,
                 "owner": meta["owner"],
                 "required_free": meta["required"],
-                "busy": port_is_busy(port),
+                "busy": busy,
+                # Busy because our own stack is up, rather than because something
+                # else holds the port.
+                "held_by_agentpath": held,
             }
         )
     return rows
@@ -476,19 +533,29 @@ def evaluate(report: Report) -> list[Check]:
     )
 
     # Ports ----------------------------------------------------------------
-    conflicts = [p for p in report.ports if p["required_free"] and p["busy"]]
-    checks.append(
-        Check(
-            id="ports",
-            status="pass" if not conflicts else "fail",
-            detail=(
-                "all required ports free"
-                if not conflicts
-                else "busy: " + ", ".join(f"{p['port']} ({p['owner']})" for p in conflicts)
-            ),
-            remedy=None if not conflicts else "Stop the conflicting service or remap the port in infra/ragflow/env.template.",
+    conflicts = [
+        p
+        for p in report.ports
+        if p["required_free"] and p["busy"] and not p.get("held_by_agentpath")
+    ]
+    ours = [p for p in report.ports if p.get("held_by_agentpath")]
+    if conflicts:
+        port_status: Status = "fail"
+        port_detail = "held by another process: " + ", ".join(
+            f"{p['port']} ({p['owner']})" for p in conflicts
         )
-    )
+        port_remedy = (
+            "Stop the conflicting service, or remap the port in infra/ragflow/env.agentpath."
+        )
+    elif ours:
+        port_status = "pass"
+        port_detail = f"{len(ours)} port(s) already published by the running AgentPath stack"
+        port_remedy = None
+    else:
+        port_status = "pass"
+        port_detail = "all required ports free"
+        port_remedy = None
+    checks.append(Check(id="ports", status=port_status, detail=port_detail, remedy=port_remedy))
 
     # Ollama ---------------------------------------------------------------
     listen = report.ollama.get("listen_addresses") or []
@@ -586,35 +653,68 @@ def render_table(report: Report) -> str:
 
 
 def render_markdown(report: Report) -> str:
+    """Render a shareable report.
+
+    Deliberately generic: this file is committed, so it states whether each
+    requirement is met without recording who or what machine it ran on. No
+    usernames, no filesystem paths, no CPU/GPU model names, no driver versions, no
+    exact capacities. The full detail stays in the JSON output, which is
+    gitignored, for local debugging.
+    """
     rows = [
         "# Environment report",
         "",
-        "Generated by `scripts/env_check.py`. Read-only inspection: this script never",
+        "Generated by `scripts/env_check.py`. Read-only inspection: the script never",
         "downloads, installs, or starts anything.",
         "",
+        "This report is intentionally generic - it records whether the machine meets",
+        "each requirement, not the machine's identity or specification. Run",
+        "`python3 scripts/env_check.py --json docs/ENVIRONMENT.json` for full local",
+        "detail; that file is gitignored.",
+        "",
         f"- Generated: `{report.generated_at}`",
-        f"- OS: {report.os.get('distribution')} (kernel `{report.os.get('kernel')}`, {report.os.get('arch')})",
-        f"- CPU: {report.cpu.get('model')} — {report.cpu.get('logical_cores')} threads",
-        f"- Memory: {report.memory.get('total_gb')} GB total, {report.memory.get('available_gb')} GB available, "
-        f"{report.memory.get('swap_total_gb')} GB swap",
+        f"- Platform: {report.os.get('platform')} ({report.os.get('arch')})",
+        f"- CPU threads: {report.cpu.get('logical_cores')} "
+        f"(requirement: 4 or more)",
+        f"- Memory: {_capacity_band(report.memory.get('total_gb', 0.0))} total "
+        f"(requirement: {MIN_TOTAL_RAM_GB:.0f} GB or more)",
+        f"- Free disk: {_capacity_band(min((d['free_gb'] for d in report.disks), default=0.0))} "
+        f"(requirement: {MIN_FREE_DISK_GB:.0f} GB or more)",
     ]
     if report.gpu:
         rows.append(
-            f"- GPU: {report.gpu['name']} — {report.gpu['memory_free_mib']} MiB free of "
-            f"{report.gpu['memory_total_mib']} MiB, driver {report.gpu['driver_version']}"
+            "- GPU: NVIDIA GPU present"
+            f" ({_capacity_band(report.gpu['memory_total_mib'] / 1024)} VRAM). "
+            "Optional: the search slice runs on CPU."
         )
-    for disk in report.disks:
-        rows.append(f"- Disk `{disk['path']}`: {disk['free_gb']} GB free of {disk['total_gb']} GB")
+    else:
+        rows.append("- GPU: none detected. Optional: the search slice runs on CPU.")
     if report.docker.get("reachable"):
-        rows.append(
-            f"- Docker: {report.docker.get('server_version')} "
-            f"(storage `{report.docker.get('storage_driver')}`, root `{report.docker.get('root_dir')}`, "
-            f"bridge `{report.docker.get('bridge_ip')}`)"
-        )
+        rows.append("- Docker daemon: reachable")
 
-    rows += ["", "## Toolchain", "", "| Tool | Version |", "| --- | --- |"]
+    rows += [
+        "",
+        "## Toolchain",
+        "",
+        "Major versions only, which is what compatibility depends on.",
+        "",
+        "| Tool | Version | Required |",
+        "| --- | --- | --- |",
+    ]
+    requirements = {
+        "docker": ">= 24",
+        "docker_compose": ">= 2.26.1",
+        "node": ">= 20",
+        "uv": "any",
+        "git": "any",
+        "python3": "any (the workspace pins 3.12 through uv)",
+        "ollama": "Stage 2 only",
+    }
     for name, value in report.tools.items():
-        rows.append(f"| `{name}` | {value or '_not found_'} |")
+        version = format_version(parse_version(value)) if value else None
+        rows.append(
+            f"| `{name}` | {version or '_not found_'} | {requirements.get(name, '-')} |"
+        )
 
     rows += [
         "",
@@ -626,31 +726,60 @@ def render_markdown(report: Report) -> str:
         "| --- | --- | --- | --- |",
     ]
     for row in report.ports:
+        if row.get("held_by_agentpath"):
+            state = "in use by AgentPath"
+        elif row["busy"]:
+            state = "busy"
+        else:
+            state = "free"
         rows.append(
-            f"| {row['port']} | {'busy' if row['busy'] else 'free'} | {row['owner']} | "
+            f"| {row['port']} | {state} | {row['owner']} | "
             f"{'yes' if row['required_free'] else 'no'} |"
         )
 
     if report.ollama.get("reachable"):
-        # Only the count is reported. Which models a developer keeps locally is
-        # their business and has no bearing on whether the stack can run.
-        model_count = len(report.ollama.get("models", []))
+        # Neither the model names nor the count are reported: what a developer keeps
+        # installed locally is their business and does not affect whether the stack
+        # can run. Only the exposure check matters here, and it is a security one.
+        listening = report.ollama.get("listen_addresses") or []
+        loopback_only = all(address.startswith(("127.", "[::1]")) for address in listening)
         rows += [
             "",
-            "## Ollama",
+            "## Ollama (Stage 2 dependency)",
             "",
-            f"- Reachable at `{report.ollama['url']}`",
-            f"- Listening on: {', '.join(report.ollama.get('listen_addresses') or ['unknown'])}",
-            f"- {model_count} pre-existing model(s), untouched by AgentPath AI",
+            "- Reachable on loopback: yes",
+            f"- Bound to loopback only: {'yes' if loopback_only else 'NO - see the gate below'}",
         ]
 
-    rows += ["", "## Gates", "", "| Gate | Status | Detail | Remedy |", "| --- | --- | --- | --- |"]
+    rows += [
+        "",
+        "## Gates",
+        "",
+        "Gate details are summarised rather than quoted, so this table stays free of",
+        "host-specific values.",
+        "",
+        "| Gate | Status | Remedy if failing |",
+        "| --- | --- | --- |",
+    ]
     for check in report.checks:
-        rows.append(
-            f"| `{check.id}` | {SYMBOLS[check.status]} | {check.detail} | {check.remedy or '—'} |"
-        )
+        rows.append(f"| `{check.id}` | {SYMBOLS[check.status]} | {check.remedy or '—'} |")
     rows += ["", f"**Verdict: {'READY' if report.ok else 'NOT READY'}**", ""]
     return "\n".join(rows)
+
+
+def _capacity_band(value_gb: float) -> str:
+    """Bucket a capacity so the report states sufficiency, not a fingerprint."""
+    for threshold, label in (
+        (128, "128 GB or more"),
+        (64, "64-128 GB"),
+        (32, "32-64 GB"),
+        (16, "16-32 GB"),
+        (8, "8-16 GB"),
+        (1, "under 8 GB"),
+    ):
+        if value_gb >= threshold:
+            return label
+    return "under 1 GB"
 
 
 # --------------------------------------------------------------------------- #

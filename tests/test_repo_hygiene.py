@@ -147,6 +147,42 @@ def test_makefile_console_scripts_resolve_to_real_entry_points() -> None:
         assert callable(getattr(module, function))
 
 
+def test_every_makefile_recipe_references_something_that_exists() -> None:
+    """Catch the whole class of "target points at a module or file that is gone".
+
+    `make search` previously invoked `python -m agentpath.cli`, which never
+    existed. A per-target test would not have caught it, so this scans every
+    recipe for the three shapes we use - `python -m module`, `python path.py`, and
+    `bash script.sh` - and checks each one resolves.
+    """
+    import importlib.util
+
+    problems: list[str] = []
+    for target, lines in _makefile_recipes().items():
+        for line in lines:
+            for module in re.findall(r"python3?\s+-m\s+([\w.]+)", line):
+                if importlib.util.find_spec(module) is None:
+                    problems.append(f"{target}: python -m {module} does not resolve")
+            for script in re.findall(r"(?:bash|sh)\s+(scripts/[\w./-]+)", line):
+                if not (REPO_ROOT / script).is_file():
+                    problems.append(f"{target}: {script} is missing")
+            for script in re.findall(r"python3?\s+(scripts/[\w./-]+\.py)", line):
+                if not (REPO_ROOT / script).is_file():
+                    problems.append(f"{target}: {script} is missing")
+    assert problems == [], "\n".join(problems)
+
+
+def test_makefile_targets_are_all_documented() -> None:
+    """Every target carries a `##` description, which is what `make help` prints."""
+    text = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    undocumented = [
+        match.group(1)
+        for match in re.finditer(r"^([a-zA-Z][\w-]*):(?![=])(.*)$", text, re.MULTILINE)
+        if "##" not in match.group(2)
+    ]
+    assert undocumented == [], f"targets without a help description: {undocumented}"
+
+
 def test_api_module_referenced_by_makefile_imports() -> None:
     from agentpath.api.app import app
 

@@ -240,7 +240,99 @@ def test_markdown_report_states_the_verdict_and_the_loopback_policy() -> None:
     markdown = env_check.render_markdown(report)
     assert "**Verdict: READY**" in markdown
     assert "127.0.0.1" in markdown
-    assert "| Gate | Status | Detail | Remedy |" in markdown
+    assert "| Gate | Status | Remedy if failing |" in markdown
+
+
+def test_markdown_report_does_not_identify_the_machine_or_its_owner() -> None:
+    """This report is committed, so it must stay shareable.
+
+    Requirement satisfaction only: no filesystem paths, no hardware model names,
+    no driver or kernel versions, no exact capacities.
+    """
+    report = _healthy_report()
+    report.os = {"distribution": "SomeDistro Linux", "kernel": "7.2.4-cachyos", "arch": "x86_64", "platform": "linux"}
+    report.cpu = {"model": "12th Gen Intel(R) Core(TM) i7-12700F", "logical_cores": 20}
+    report.gpu = {
+        "name": "NVIDIA GeForce RTX 4060",
+        "memory_total_mib": 8188,
+        "memory_used_mib": 1000,
+        "memory_free_mib": 7188,
+        "driver_version": "615.71.09",
+    }
+    report.disks = [{"path": "/home/someone/Projects/thing", "total_gb": 930.0, "free_gb": 245.4}]
+    report.docker = {
+        "reachable": True,
+        "server_version": "29.8.0",
+        "storage_driver": "overlayfs",
+        "root_dir": "/var/lib/docker",
+        "bridge_ip": "172.17.0.1",
+    }
+    report.ollama = {
+        "url": "http://127.0.0.1:11434",
+        "reachable": True,
+        "models": [{"name": "someone/private-model:27b", "size_gb": 16.0}],
+        "listen_addresses": ["127.0.0.1:11434"],
+    }
+    report.checks = env_check.evaluate(report)
+    markdown = env_check.render_markdown(report)
+
+    forbidden = [
+        "/home/someone",
+        "Projects/thing",
+        "i7-12700F",
+        "RTX 4060",
+        "615.71.09",
+        "7.2.4-cachyos",
+        "SomeDistro",
+        "private-model",
+        "/var/lib/docker",
+        "245.4",
+        "930.0",
+        "8188",
+    ]
+    leaked = [needle for needle in forbidden if needle in markdown]
+    assert leaked == [], f"environment report leaks host detail: {leaked}"
+
+    # It must still be useful: sufficiency per requirement.
+    assert "16-32 GB" in markdown or "32-64 GB" in markdown
+    assert "NVIDIA GPU present" in markdown
+    assert "Docker daemon: reachable" in markdown
+
+
+def test_ports_held_by_the_running_stack_are_not_conflicts() -> None:
+    """Re-running the check after `make ragflow-up` must not report NOT READY."""
+    report = _healthy_report()
+    report.ports = [
+        {
+            "port": 9380,
+            "owner": "RAGFlow HTTP API",
+            "required_free": True,
+            "busy": True,
+            "held_by_agentpath": True,
+        }
+    ]
+    report.checks = env_check.evaluate(report)
+    gate = _gate(report.checks, "ports")
+    assert gate.status == "pass"
+    assert "AgentPath" in gate.detail
+    assert report.ok
+
+
+def test_a_port_held_by_something_else_still_fails() -> None:
+    report = _healthy_report()
+    report.ports = [
+        {
+            "port": 8000,
+            "owner": "apps/api (FastAPI)",
+            "required_free": True,
+            "busy": True,
+            "held_by_agentpath": False,
+        }
+    ]
+    report.checks = env_check.evaluate(report)
+    gate = _gate(report.checks, "ports")
+    assert gate.status == "fail"
+    assert "another process" in gate.detail
 
 
 def test_table_report_lists_every_gate() -> None:
@@ -258,6 +350,33 @@ def test_port_plan_publishes_nothing_outside_loopback_by_design() -> None:
     assert 8000 in required and 9380 in required
     # 8080 is occupied on this host; the plan must not claim it.
     assert 8080 not in env_check.PORT_PLAN
+
+
+@pytest.mark.parametrize(
+    ("docker_output", "expected"),
+    [
+        ("127.0.0.1:6379->6379/tcp", {6379}),
+        # Docker collapses consecutive publications into a range.
+        ("127.0.0.1:9380-9384->9380-9384/tcp", {9380, 9381, 9382, 9383, 9384}),
+        ("127.0.0.1:9000-9001->9000-9001/tcp", {9000, 9001}),
+        ("33060/tcp, 127.0.0.1:3307->3306/tcp", {3307}),
+        (
+            "127.0.0.1:9380-9384->9380-9384/tcp, 127.0.0.1:8081->80/tcp",
+            {9380, 9381, 9382, 9383, 9384, 8081},
+        ),
+        ("9300/tcp", set()),
+    ],
+)
+def test_published_port_parsing_handles_ranges(
+    monkeypatch: pytest.MonkeyPatch, docker_output: str, expected: set[int]
+) -> None:
+    monkeypatch.setattr(env_check, "run", lambda *args, **kwargs: docker_output)
+    assert env_check.agentpath_published_ports() == expected
+
+
+def test_published_port_parsing_survives_no_docker(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(env_check, "run", lambda *args, **kwargs: None)
+    assert env_check.agentpath_published_ports() == set()
 
 
 def test_port_is_busy_detects_a_bound_socket() -> None:

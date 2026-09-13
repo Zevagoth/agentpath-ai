@@ -100,8 +100,11 @@ web: ## Run the Next.js dev server on 127.0.0.1:3000
 	@cd apps/web && npm run dev
 
 .PHONY: search
-search: ## One-off search from the CLI: make search Q="hotel has no room"
-	@uv run python -m agentpath.cli search "$(Q)"
+search: ## One-off search from the terminal: make search Q="hotel has no room"
+	@curl -sS -X POST http://127.0.0.1:8000/api/search \
+		-H 'Content-Type: application/json' \
+		-d '{"query": $(shell printf '%s' '$(Q)' | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}' \
+		| python3 -m json.tool
 
 # --------------------------------------------------------------------------- #
 # Quality

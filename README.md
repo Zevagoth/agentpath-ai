@@ -82,12 +82,27 @@ RAGFlow API 9380, embedder 7998, reranker 7997.
 ## Testing
 
 ```bash
-make test              # backend, 235 tests, no stack required
-make test-web          # web unit tests, 20 tests, no stack required
+make test              # backend suite, no stack required
+make test-web          # web unit suite, no stack required
+make test-all          # both of the above
 make test-web-live     # real UI components against the running API
 make test-e2e          # Playwright in Chromium (needs: make install-web-browsers)
 make eval              # the benchmark; writes evaluation/reports/
 ```
+
+Counts as of the last run:
+
+| Suite | Command | Tests | Needs the stack |
+| --- | --- | --- | --- |
+| Backend | `make test` | 263 | no |
+| Web unit | `make test-web` | 20 | no |
+| Live UI | `make test-web-live` | 5 | yes |
+| Browser (Playwright) | `make test-e2e` | 5 specs | yes, plus a browser download |
+
+The Playwright specs are committed but unverified on the reference machine: the
+Chromium download stalls during extraction there. The same five assertions run
+through `make test-web-live`, which drives the real components against the real API
+in jsdom.
 
 ## How it works
 

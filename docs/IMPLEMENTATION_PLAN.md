@@ -21,7 +21,7 @@ and explicit abstention when the knowledge base has no answer.
 | Answer model | `qwen2.5:7b-instruct` via host Ollama | Stage 2; called from the API over loopback, so it needs no container networking |
 | API | FastAPI, Python 3.12 via uv | |
 | Web | Next.js 15 + React 19, plain CSS | RTL/LTR per field |
-| Tests | Pytest, Vitest, Playwright | 251 backend, 20 web unit, 5 live UI |
+| Tests | Pytest, Vitest, Playwright | 263 backend, 20 web unit, 5 live UI, 5 browser specs |
 
 Replaceability: application code depends on the `Retriever` port in
 `agentpath.retrieval.ports`. `RAGFlowRetriever` is the only production
@@ -112,8 +112,12 @@ until retrieval is working and measured. That condition is now met.
 - README (run instructions, measured results), SECURITY, EVALUATION,
   TROUBLESHOOTING, this plan
 - `tests/test_repo_hygiene.py` keeps them honest: no tracked secrets, loopback-only
-  ports, Makefile targets pointing at real files, README links resolving, the
-  abstention wording identical in code and docs
+  ports, every Makefile recipe resolving to a module or file that exists, README
+  links resolving, the abstention wording identical in code and docs
+- `docs/ENVIRONMENT.md` is generated in a shareable form: requirement satisfaction
+  and major tool versions only, with no host identity, paths, hardware models or
+  exact capacities. A test enforces the redaction; the full detail goes to the
+  gitignored JSON output
 
 ## Known gaps at the end of session 1
 

@@ -19,12 +19,13 @@ Starting Bert model on Cpu
 **What was verified alongside it**
 
 - `nvidia-smi` runs *inside the same container* and reports the GPU correctly
-  (RTX 4060, driver `615.71.09`, CUDA UMD 13.4).
+  (Ada-generation GeForce, compute capability sm_89, driver branch `615.x`,
+  CUDA UMD 13.x).
 - `/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools`
   are all present inside the container.
 - The host driver libraries are injected: `ldconfig -p` resolves
-  `libcuda.so.1` to `/lib/libcuda.so.1` (the 615.71.09 build), not to the
-  image's bundled `compat` copy.
+  `libcuda.so.1` to the host driver build, not to the image's bundled `compat`
+  copy.
 - `NVIDIA_DRIVER_CAPABILITIES=compute,utility` and `NVIDIA_VISIBLE_DEVICES=all`
   are set in the container environment.
 - Host-side CUDA works: Ollama runs GPU inference on the same machine.
@@ -110,7 +111,7 @@ returning the component map directly:
 
 Parsing it as wrapped made a healthy service look unreachable in `/health`.
 
-## Environment notes for this host
+## Environment notes from the reference machine
 
 - **ufw is active**, and it drops traffic from Docker's user-defined bridge to
   host addresses. A host-side model daemon (for example Ollama on

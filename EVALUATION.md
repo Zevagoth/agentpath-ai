@@ -187,8 +187,8 @@ the moment a working runtime is available.
 1. **Corpus size.** Five procedures. Retrieval over five documents is a much
    easier problem than over five hundred; these numbers will move.
 2. **The threshold is fitted to the reported set.** See above.
-3. **Single machine, single run.** One host (RTX 4060, 20-thread CPU), 3 repeats
-   per query. No concurrency testing, so p95 under load is unknown.
+3. **Single machine, single run.** One consumer desktop, retrieval entirely on
+   CPU, 3 repeats per query. No concurrency testing, so p95 under load is unknown.
 4. **The query set is written by the same person who wrote the procedures.** That
    biases phrasing toward what the corpus contains. Queries from real agents would
    be harsher.
