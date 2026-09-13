@@ -1,0 +1,118 @@
+# AgentPath AI additions to the RAGFlow stack.
+#
+# Applied as a Compose override on top of RAGFlow's own docker-compose.yml, so
+# RAGFlow itself stays untouched at its pinned tag and our additions are
+# reviewable in one place.
+#
+# What this adds:
+#   * agentpath-reranker - cross-encoder reranking service on the RAGFlow
+#     network. RAGFlow talks to it through its "HuggingFace" rerank provider,
+#     whose wire protocol is exactly Text Embeddings Inference's /rerank
+#     endpoint: {"query", "texts"} in, [{"index", "score"}] out.
+#
+# Why TEI rather than a heavier runtime: the image is small, the tag is pinned,
+# it runs the model on CPU so the RTX 4060 stays free for the Stage 2 chat
+# model, and RAGFlow already supports the protocol without a custom adapter.
+
+services:
+  # Embedding service. RAGFlow's slim image ships no embedding model, so one has
+  # to be provided externally.
+  #
+  # Why a container rather than the host's Ollama daemon: ufw is active on the
+  # development host and drops traffic from Docker's user-defined bridge to host
+  # addresses. Reaching a host-side daemon would need a firewall rule; keeping the
+  # model service on RAGFlow's own network needs nothing, exposes nothing, and
+  # leaves the host Ollama untouched on loopback for later answer generation.
+  #
+  # Same model as planned (bge-m3, strong Arabic and English), same TEI image as
+  # the reranker, so no additional image download.
+  agentpath-embedder:
+    image: ${AGENTPATH_EMBEDDER_IMAGE}
+    container_name: agentpath-embedder
+    command:
+      - --model-id
+      - ${AGENTPATH_EMBEDDER_MODEL}
+      - --port
+      - "80"
+      # bge-m3 is an XLM-R large model. TEI sizes its workspace from
+      # max-batch-tokens, so this cap is what keeps resident memory in the low
+      # gigabytes instead of the ~21 GB TEI's defaults would reserve.
+      - --max-batch-tokens
+      - "8192"
+      - --max-client-batch-size
+      - "16"
+      - --auto-truncate
+    environment:
+      - HUGGINGFACE_HUB_CACHE=/data
+      - HF_HOME=/data
+    volumes:
+      - agentpath_embedder_cache:/data
+    ports:
+      # Loopback only, for verification from the host.
+      - ${AGENTPATH_EMBEDDER_PORT}:80
+    networks:
+      - ragflow
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 600s
+    restart: unless-stopped
+
+  # Reranking service. This one runs on the GPU, and the reason is measured
+  # rather than assumed: bge-reranker-v2-m3 is an XLM-R large cross-encoder, and
+  # scoring ~30 candidates for a single query took 20-22 s on the CPU backend
+  # (which caps its batch at 4), against 0.17-0.36 s for the whole hybrid
+  # retrieval call without reranking. CPU reranking therefore cannot meet the
+  # two-second target; the GPU can.
+  #
+  # The image tag encodes the CUDA compute capability: 89 is Ada Lovelace, which
+  # is what an RTX 4060 is. Change it for other hardware (turing, 86, hopper).
+  agentpath-reranker:
+    image: ${AGENTPATH_RERANKER_IMAGE}
+    container_name: agentpath-reranker
+    command:
+      - --model-id
+      - ${AGENTPATH_RERANKER_MODEL}
+      - --port
+      - "80"
+      # 32 candidates per query is the retrieval budget; 64 leaves headroom.
+      - --max-client-batch-size
+      - "64"
+      - --max-batch-tokens
+      - "16384"
+    environment:
+      # Model weights land in the named volume below, not in the image layer.
+      - HUGGINGFACE_HUB_CACHE=/data
+      - HF_HOME=/data
+    volumes:
+      - agentpath_reranker_cache:/data
+    ports:
+      # Loopback only. Published so the verification script and tests can reach
+      # it directly from the host without entering the container.
+      - ${AGENTPATH_RERANKER_PORT}:80
+    networks:
+      - ragflow
+    # Roughly 2.5 GB of VRAM. The embedder deliberately stays on CPU so the rest
+    # of the 8 GB remains available for Stage 2 answer generation.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 300s
+    restart: unless-stopped
+
+volumes:
+  agentpath_embedder_cache:
+    driver: local
+  agentpath_reranker_cache:
+    driver: local

@@ -54,7 +54,6 @@ def _healthy_report() -> Any:
         "docker_compose": "Docker Compose version 2.29.0",
         "git": "git version 2.55.0",
         "ollama": "ollama version is 0.34.0",
-        "socat": "/usr/bin/socat",
     }
     report.docker = {"reachable": True, "server_version": "29.8.0", "bridge_ip": "172.17.0.1"}
     report.kernel_params = {"vm.max_map_count": 1048576}

@@ -55,13 +55,10 @@ ragflow-logs: ## Tail RAGFlow server logs
 ragflow-health: ## Report the health of every stack dependency
 	@bash scripts/ragflow_health.sh
 
-.PHONY: ollama-bridge
-ollama-bridge: ## Publish Ollama on the Docker bridge interface only (no LAN exposure)
-	@bash scripts/ollama_bridge.sh start
+
 
 .PHONY: models
-models: ## Pull bge-m3 and register the embedding + rerank models in RAGFlow
-	@bash scripts/pull_models.sh
+models: ## Register the embedding + rerank models in RAGFlow and verify them
 	@uv run python scripts/configure_ragflow_models.py
 
 .PHONY: models-verify

@@ -58,7 +58,8 @@ PORT_PLAN: dict[int, dict[str, Any]] = {
     8081: {"owner": "RAGFlow web UI (nginx; 8080 was busy on this host)", "required": True},
     9380: {"owner": "RAGFlow HTTP API", "required": True},
     9381: {"owner": "RAGFlow admin server", "required": True},
-    7997: {"owner": "AgentPath reranker sidecar", "required": True},
+    7997: {"owner": "AgentPath reranker sidecar (TEI, bge-reranker-v2-m3)", "required": True},
+    7998: {"owner": "AgentPath embedder sidecar (TEI, bge-m3)", "required": True},
     1200: {"owner": "Elasticsearch (RAGFlow doc engine)", "required": True},
     3307: {"owner": "MySQL (RAGFlow metadata; host-side remap of 3306)", "required": True},
     6379: {"owner": "Redis (RAGFlow)", "required": True},
@@ -290,7 +291,6 @@ def collect_tools() -> dict[str, str | None]:
         "docker_compose": run(["docker", "compose", "version"]),
         "git": run(["git", "--version"]),
         "ollama": run(["ollama", "--version"]),
-        "socat": shutil.which("socat"),
     }
 
 
@@ -533,18 +533,6 @@ def evaluate(report: Report) -> list[Check]:
                 ),
             )
         )
-
-    # socat (bridge relay for Ollama) --------------------------------------
-    checks.append(
-        Check(
-            id="socat",
-            status="pass" if report.tools.get("socat") else "warn",
-            detail=report.tools.get("socat") or "socat not found",
-            remedy=None
-            if report.tools.get("socat")
-            else "Install socat, or the Ollama bridge relay will use the bundled Python fallback.",
-        )
-    )
 
     return checks
 
