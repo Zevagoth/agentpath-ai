@@ -97,9 +97,27 @@ vector similarity.
    synonym expansion and typo correction, their scores rise above it. The engine
    alone is not just less accurate, it is more likely to give an agent nothing.
 
-**Arabic.** All 6 Arabic queries and the mixed-language query resolve to the right
-English procedure in the full pipeline. This was the original problem statement,
-and it is the part that plain keyword search cannot do at all.
+**Arabic, stated carefully.** All 6 Arabic queries resolve to the right English
+procedure in the full pipeline — but so do they in the lexical baseline, which
+scores Recall@1 100% on that group too. The reason is the dataset, not the
+retrieval method: every procedure is authored with its Arabic synonyms, so those
+Arabic strings are literally in the indexed text and plain term overlap finds them.
+
+Claiming "keyword search cannot handle Arabic" would therefore be false here. What
+this benchmark does show about Arabic is narrower and worth keeping separate:
+
+- The **mixed-language** query (`overbooking بالفندق والضيف موجود`) is ranked
+  correctly at position 1 only by the full pipeline; the baseline and the raw engine
+  both put the wrong hotel procedure first (Recall@1 0%, Recall@3 100%).
+- Arabic **spelling variation** is handled by normalization rather than by the
+  index: `إلغاء`, `الغاء`, `إلغــاء` and `إِلْغَاء` all collapse to one form before
+  matching, which is what keeps Arabic recall from depending on how the agent typed
+  the word.
+
+Whether semantic retrieval is what carries Arabic in a knowledge base where Arabic
+synonyms are *not* hand-authored is a reasonable expectation, but this benchmark
+does not test it. Doing so needs a procedure set written English-only, which is a
+Stage 2 experiment.
 
 ## Abstention, and the threshold behind it
 
@@ -174,10 +192,14 @@ the moment a working runtime is available.
 4. **The query set is written by the same person who wrote the procedures.** That
    biases phrasing toward what the corpus contains. Queries from real agents would
    be harsher.
-5. **No citation-correctness scoring yet.** The API guarantees citations *exist*
+5. **Arabic recall is helped by bilingual authoring.** Because Arabic synonyms are
+   written into every procedure, even keyword overlap finds them, so this set does
+   not isolate what cross-lingual embeddings contribute. A procedure set authored
+   English-only would.
+6. **No citation-correctness scoring yet.** The API guarantees citations *exist*
    and point at the retrieved chunks; whether each cited chunk truly supports a
    specific claim only becomes measurable once answer generation exists.
-6. **Reranking unmeasured on GPU**, so the accuracy/latency trade-off of the full
+7. **Reranking unmeasured on GPU**, so the accuracy/latency trade-off of the full
    architecture is not yet known.
 
 ## Files

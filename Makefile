@@ -30,6 +30,15 @@ install: ## Create the Python workspace virtualenv (uv-managed CPython 3.12)
 .PHONY: install-web
 install-web: ## Install web app dependencies
 	@cd apps/web && npm install
+	@echo "web dependencies installed. Browser tests also need: make install-web-browsers"
+
+.PHONY: install-web-browsers
+install-web-browsers: ## Download the Chromium build Playwright uses (~150 MB)
+	@cd apps/web && npx playwright install chromium
+
+.PHONY: web-build
+web-build: ## Production build of the web app
+	@cd apps/web && npm run build
 
 # --------------------------------------------------------------------------- #
 # RAGFlow stack
@@ -87,6 +96,7 @@ api: ## Run the FastAPI service on 127.0.0.1:8000
 
 .PHONY: web
 web: ## Run the Next.js dev server on 127.0.0.1:3000
+	@test -d apps/web/node_modules || (echo "run 'make install-web' first" && exit 1)
 	@cd apps/web && npm run dev
 
 .PHONY: search
@@ -106,12 +116,21 @@ test-integration: ## Run tests that require the live stack
 	@uv run pytest -m integration
 
 .PHONY: test-web
-test-web: ## Run web unit tests
+test-web: ## Run web unit tests (no stack required)
 	@cd apps/web && npm run test
 
+.PHONY: test-web-live
+test-web-live: ## Run the real UI components against the running API
+	@cd apps/web && npm run test:live
+
 .PHONY: test-e2e
-test-e2e: ## Run Playwright end-to-end tests
+test-e2e: ## Run Playwright browser tests (needs: make install-web-browsers)
 	@cd apps/web && npm run test:e2e
+
+.PHONY: test-all
+test-all: ## Backend + web unit tests
+	@uv run pytest -m "not integration" -q
+	@cd apps/web && npm run test
 
 .PHONY: lint
 lint: ## Lint Python sources

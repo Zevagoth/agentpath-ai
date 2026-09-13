@@ -1,127 +1,142 @@
 # AgentPath AI - implementation plan and progress
 
 > All knowledge-base content in this repository is **fictional and synthetic**.
-> AgentPath AI is an independent proof of concept with no affiliation to any
-> travel company. See [SECURITY.md](../SECURITY.md).
+> See [SECURITY.md](../SECURITY.md).
 
 ## Product goal
 
-An agent-facing assistant that turns a free-text customer-service case
-(Arabic or English) into the correct internal procedure, using hybrid lexical +
-semantic retrieval with cross-encoder reranking, grounded answers with
-citations, the original procedural screenshots, and explicit abstention when the
-knowledge base has no answer.
+An agent-facing assistant that turns a free-text customer-service case (Arabic or
+English) into the correct internal procedure, using hybrid lexical + semantic
+retrieval, grounded answers with citations, the original procedural screenshots,
+and explicit abstention when the knowledge base has no answer.
 
-## Architecture at a glance
+## Architecture as built
 
-| Concern | Choice | Why |
+| Concern | Choice | Note |
 | --- | --- | --- |
-| Document/RAG engine | RAGFlow v0.27.2 (Docker) | Parsing, OCR, chunking, hybrid retrieval and citations out of the box |
-| Doc engine | Elasticsearch | Real BM25 lexical scoring next to kNN, plus `highlight` for citation snippets |
-| Embeddings | `bge-m3` via Ollama | Strong Arabic + English; ~1.2 GB GGUF instead of TEI's ~21 GB load requirement |
-| Reranker | `bge-reranker-v2-m3` in a CPU sidecar | Keeps the RTX 4060 free for the Stage 2 chat model; registered in RAGFlow as a `LocalAI` rerank provider |
-| Answer model (Stage 2) | `qwen2.5:7b-instruct` via Ollama | Local, Arabic-capable; 3B fallback if measurements demand it |
-| API | FastAPI (Python 3.12 via uv) | Typed, async, testable |
-| Web | Next.js + TypeScript | RTL-aware agent console |
-| Tests | Pytest, Vitest, Playwright | Backend, web units, end-to-end |
+| Document/RAG engine | RAGFlow v0.27.2 (Docker) | Parsing, chunking, hybrid retrieval, citation highlights |
+| Doc engine | Elasticsearch | BM25 term scoring beside kNN |
+| Embeddings | `BAAI/bge-m3` via a TEI container, CPU | Same model as planned; TEI instead of Ollama because ufw blocks bridge-to-host traffic, so the model service lives inside RAGFlow's network |
+| Reranking | `BAAI/bge-reranker-v2-m3` via a TEI container | Registered and code-live, **disabled** behind `AGENTPATH_ENABLE_RERANK`; see [TROUBLESHOOTING](TROUBLESHOOTING.md) |
+| Answer model | `qwen2.5:7b-instruct` via host Ollama | Stage 2; called from the API over loopback, so it needs no container networking |
+| API | FastAPI, Python 3.12 via uv | |
+| Web | Next.js 15 + React 19, plain CSS | RTL/LTR per field |
+| Tests | Pytest, Vitest, Playwright | 251 backend, 20 web unit, 5 live UI |
 
 Replaceability: application code depends on the `Retriever` port in
 `agentpath.retrieval.ports`. `RAGFlowRetriever` is the only production
-implementation; the embedding model, reranker and LLM are configuration.
+implementation.
 
 ## Session 1 scope
 
 Search and evaluation only. **No answer generation and no image understanding**
-until hybrid retrieval is working and measured.
+until retrieval is working and measured. That condition is now met.
 
 ## Progress
 
-Legend: `[x]` done and verified · `[~]` in progress · `[ ]` not started
-
 ### Task 1 - Environment verification and repository skeleton `[x]`
 
-- [x] `scripts/env_check.py`: read-only gates (disk, RAM, Docker, Compose,
-      `vm.max_map_count`, ports, GPU, Ollama LAN exposure)
-- [x] Repository skeleton, `.gitignore`, `.env.example`, `Makefile`
-- [x] uv workspace: `agentpath`, `agentpath-ingestion`, `agentpath-eval` on CPython 3.12
-- [x] `tests/test_env_check.py` - 28 tests covering gates, parsing and rendering
-- [x] Verified on this machine: verdict **READY** (see [ENVIRONMENT.md](ENVIRONMENT.md))
+- `scripts/env_check.py` with hard gates (disk, RAM, Docker/Compose, `vm.max_map_count`,
+  ports, GPU headroom, Ollama LAN exposure); 28 tests
+- uv workspace on CPython 3.12; `.gitignore`, `.env.example`, `Makefile`
+- Findings that shaped everything after: port 8080 occupied → RAGFlow UI on 8081;
+  only CPython 3.14 installed system-wide → workspace pins 3.12; `vm.max_map_count`
+  already sufficient → no sudo needed anywhere
 
-Findings that changed the plan:
+### Task 2 - RAGFlow v0.27.2 stack `[x]`
 
-- `vm.max_map_count` is already `1048576` - **no sudo step is needed**.
-- Port `8080` is occupied on this host, so the RAGFlow UI is published on **8081**.
-- Only CPython 3.14 is installed system-wide; the workspace pins **3.12** via uv
-  to stay inside the supported wheel range.
-- Ollama listens on `127.0.0.1:11434` only. Containers reach it through a
-  bridge-only relay (`scripts/ollama_bridge.sh`), never via `0.0.0.0`.
-- Free VRAM was 70 MiB during the check (a game was running), so embeddings run
-  on CPU for now. This does not block the search slice.
+- `scripts/bootstrap_ragflow.sh` clones at the pinned tag, renders `docker/.env`
+  from upstream + `infra/ragflow/env.agentpath`, generates secrets into `.env.local`
+- Guards refuse to start on a shipped default password or a non-loopback port
+- `scripts/ragflow_health.sh` reports per-service health and audits exposure
 
-### Task 2 - RAGFlow v0.27.2 stack `[ ]`
+### Task 3 - Embedding and reranking path `[x]`
 
-- [ ] `scripts/bootstrap_ragflow.sh`: clone at tag into `.external/ragflow`,
-      render `docker/.env` from `infra/ragflow/env.template`
-- [ ] Generated secrets into `.env.local` (`openssl rand -hex 32`), no shipped defaults
-- [ ] All published ports remapped to `127.0.0.1`
-- [ ] `scripts/ragflow_health.sh`
-- [ ] RAGFlow API key acquired and stored in `.env.local`
+- Two TEI sidecars on RAGFlow's network; `scripts/configure_ragflow_models.py`
+  provisions the operator account, API key, providers and tenant defaults
+- Verified: 1024-dim embeddings; cross-lingual cosine **0.760** for the same
+  meaning in Arabic and English against **0.523** for an unrelated phrase; the
+  reranker scores the relevant passage 0.62 and the others 0.00
+- Reranking left off: 20-22 s per query on CPU, and an unresolved CUDA
+  initialization failure inside Docker on GPU
 
-### Task 3 - Embedding and reranking path `[ ]`
+### Task 4 - Synthetic procedures `[x]`
 
-- [ ] `bge-m3` pulled into Ollama
-- [ ] Ollama bridge relay bound to the Docker bridge interface only
-- [ ] Reranker sidecar (`bge-reranker-v2-m3`, CPU) on the RAGFlow network
-- [ ] Providers registered in RAGFlow, tenant defaults set
-- [ ] Verified: embedding dimensions and rerank score ordering
+- Five Northwind Travel procedures with bilingual titles, synonyms, conditions,
+  numbered steps carrying AgentDesk screen and control names, decision branches,
+  do/do-not, exceptions, escalation with approver, customer wording, version
+- `data/synthetic/lexicon.yaml`: typos, abbreviations, bilingual concepts
+- Guards: no real brand name anywhere under `data/`, no currency amounts
 
-### Task 4 - Five synthetic procedures `[ ]`
+### Task 5 - Ingestion into RAGFlow `[x]`
 
-- [ ] `data/synthetic/procedures/*.yaml` with schema validation
-- [ ] Markdown renderer with the `FICTIONAL - SYNTHETIC DEMO DATA` banner
-- [ ] `data/synthetic/lexicon.yaml` (Arabic + English synonyms, scenario rules)
-- [ ] Brand-guard test
+- `agentpath-ingest build|ingest|verify`, idempotent via a content hash in
+  document metadata, parse polling with RAGFlow's own progress messages
+- Verified: 5 documents, 31 chunks, 32 s
 
-### Task 5 - Ingestion into RAGFlow `[ ]`
+### Task 6 - Retriever port, RAGFlowRetriever, query understanding `[x]`
 
-- [ ] `agentpath-ingest build|ingest|status|verify`
-- [ ] Dataset with `bge-m3@Ollama`, metadata fields for filtering
-- [ ] Idempotent re-ingestion, parse polling
+- Script-based language detection, Arabic normalization, lexicon-driven correction
+  and expansion, scenario tags, product-line classification
+- Chunk-to-procedure aggregation; a procedure scores as its best passage
+- One abstention rule in `agentpath.evidence`, shared by API, CLI and benchmark
+- 36 tests against recorded RAGFlow payloads
 
-### Task 6 - Retriever port, RAGFlowRetriever, query understanding `[ ]`
+### Task 7 - Search API `[x]`
 
-- [ ] Typed domain models and the `Retriever` port
-- [ ] Hybrid retrieval call (`keyword=true`, vector weight, `rerank_id`, `metadata_condition`)
-- [ ] Language detection, Arabic normalization, lexicon expansion, scenario tags
-- [ ] Chunk to procedure aggregation, evidence grading
+- `POST /api/search`, `GET /health`; structured JSON logging with request ids
+- Engine outage is 503 and never resembles "no procedure found"
+- 20 tests with a fake retriever
 
-### Task 7 - FastAPI search endpoint `[ ]`
+### Task 8 - Benchmark `[x]`
 
-- [ ] `POST /api/search`, `GET /health`
-- [ ] Structured logging with per-stage latency, loopback binding
+- Three modes over 30 queries (26 supported, 4 unsupported), scored separately
+- Result: keyword baseline 85% R@1 → raw engine 92% → full path **100%**, with
+  false abstention 8% → 12% → **0%**, p95 **169 ms**
+- Abstention threshold derived from the observed distribution, with the thin
+  0.034 gap documented as a limitation
+- 50 tests
 
-### Task 8 - Lexical baseline and evaluation harness `[ ]`
+### Task 9 - Web console `[x]`
 
-- [ ] Benchmark-only lexical retriever
-- [ ] `evaluation/queries.yaml` (>= 10 typed queries incl. Arabic, typos, unsupported)
-- [ ] Recall@1, Recall@3, MRR, mean and p95 latency, abstention correctness
-- [ ] Markdown + JSON report
+- Case field with automatic RTL/LTR, product-line filter, example chips
+- Distinct loading, error, abstention and results states
+- Top 3 procedures with rank, ID, version, effective date, score, matched-section
+  count, and source passages with term/vector score breakdown
+- Applied corrections and expansions shown back to the agent
+- Round-trip and server timings displayed
+- 20 unit tests, 5 live tests against the running stack, 5 Playwright specs
 
-### Task 9 - Minimal web UI and session report `[ ]`
+### Task 10 - Documentation `[x]`
 
-- [ ] Next.js search page with RTL support and evidence badge
-- [ ] Vitest units, Playwright end-to-end
-- [ ] README, ARCHITECTURE, SECURITY, EVALUATION
-- [ ] Session report
+- README (run instructions, measured results), SECURITY, EVALUATION,
+  TROUBLESHOOTING, this plan
+- `tests/test_repo_hygiene.py` keeps them honest: no tracked secrets, loopback-only
+  ports, Makefile targets pointing at real files, README links resolving, the
+  abstention wording identical in code and docs
 
-## Stage 2 (not this session)
+## Known gaps at the end of session 1
 
-1. Deterministic screenshot pipeline (HTML/CSS templates rendered by Playwright).
-2. Expand to 12+ procedures with screenshot steps; ingest images as chunks with
-   OCR text, step metadata and structured descriptions, computed at ingestion.
-3. Grounded answer generation with citations, conflict handling and the exact
-   abstention message.
-4. Full agent console: answer card, screenshots beside steps, Do/Don't,
-   escalation, feedback buttons.
-5. Full evaluation: 50+ queries, citation correctness, latency targets.
-6. Containerize `apps/api` and `apps/web` for one-command startup.
+1. **Reranking is unmeasured on GPU.** Unresolved CUDA initialization failure
+   inside Docker; the flag exists and the model is registered.
+2. **Playwright browser download stalls on this host** during extraction. The
+   specs are committed; the same five assertions run through
+   `make test-web-live` against the real stack in jsdom.
+3. **The abstention threshold is fitted to the reported query set** (0.034 gap).
+4. **Five procedures.** Retrieval quality will move as the corpus grows.
+5. **No CI yet.** Test counts are local.
+
+## Stage 2 (not started, in order)
+
+1. Deterministic screenshot generation: committed HTML/CSS AgentDesk mocks rendered
+   by Playwright, watermarked.
+2. Expand to 12+ procedures with screenshot steps; ingest images as chunks with OCR
+   text, step metadata and structured descriptions, all computed at ingestion.
+3. Grounded answer generation on `qwen2.5:7b-instruct`: steps, clarification
+   questions, conditions, escalation, customer wording, citations everywhere,
+   conflict surfacing by version, and the exact abstention message.
+4. Full console: answer card, screenshots beside their steps, do/don't, feedback
+   buttons.
+5. Evaluation at 50+ queries with a held-out split for threshold tuning, and
+   citation-correctness scoring.
+6. GitHub Actions, then containerize the API and web app for one-command startup.
