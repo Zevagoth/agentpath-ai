@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     rerank_candidates: int = Field(default=32, ge=1, validation_alias="RAGFLOW_RERANK_CANDIDATES")
     page_size: int = Field(default=12, ge=1, validation_alias="RAGFLOW_PAGE_SIZE")
 
+    # Feature flag for cross-encoder reranking. Off by default because the only
+    # working runtime on the development host is CPU, where reranking measured
+    # 20-22 s per query against 0.2 s for hybrid retrieval alone. The model stays
+    # registered and the code path stays exercised by the benchmark: reranking
+    # earns its cost as the corpus grows, and this flag is how it gets turned on.
+    enable_rerank: bool = Field(default=False, validation_alias="AGENTPATH_ENABLE_RERANK")
+
     # RAGFlow's ``keyword`` flag does NOT enable BM25 (that is always on and
     # weighted by ``vector_similarity_weight``). It asks an LLM to extract
     # keywords and appends them to the question, which costs a chat-model round

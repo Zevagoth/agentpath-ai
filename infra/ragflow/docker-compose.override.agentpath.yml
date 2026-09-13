@@ -110,11 +110,12 @@ services:
       - ${AGENTPATH_RERANKER_PORT}:80
     networks:
       - ragflow
-    # GPU reservation kept here but inert: on this host, CUDA init fails inside
-    # the container (CUDA_ERROR_UNKNOWN) even though nvidia-smi works and devices
-    # plus driver libraries are injected, so TEI falls back to CPU. Both the
-    # 89-1.8 and 89-latest images behave identically, which rules out the image.
-    # Re-enable by uncommenting once container CUDA works on this driver branch
+    # GPU reservation kept here but inert: this host hits an unresolved CUDA
+    # initialization failure inside Docker (CUDA_ERROR_UNKNOWN) even though
+    # nvidia-smi works in the same container and devices plus driver libraries are
+    # injected, so TEI falls back to CPU. Both 89-1.8 and 89-latest behave the
+    # same way, which rules out the image but does not identify the cause.
+    # Re-enable by uncommenting once container CUDA initialises here
     # (see docs/TROUBLESHOOTING.md).
     # deploy:
     #   resources:

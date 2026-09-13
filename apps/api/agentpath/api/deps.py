@@ -84,14 +84,15 @@ async def _probe_http(*, name: str, url: str, detail: str) -> DependencyHealth:
 def build_retriever(settings: Settings, client: RAGFlowClient) -> Retriever:
     """Construct the production retriever.
 
-    ``rerank_model`` is passed through only when configured. Reranking is a
-    measurable improvement, not a requirement: hybrid retrieval answers on its
-    own, and the benchmark reports both so the trade-off stays visible.
+    Reranking requires both the feature flag and a configured model, so enabling
+    it is a deliberate act rather than a side effect of a model happening to be
+    registered. The benchmark reports both paths so the trade-off stays visible.
     """
+    rerank_model = settings.ragflow_rerank_model if settings.enable_rerank else None
     return RAGFlowRetriever(
         client,
         dataset_name=settings.ragflow_dataset_name,
-        rerank_model=settings.ragflow_rerank_model or None,
+        rerank_model=rerank_model or None,
         vector_similarity_weight=settings.vector_similarity_weight,
         similarity_threshold=settings.similarity_threshold,
         rerank_candidates=settings.rerank_candidates,
