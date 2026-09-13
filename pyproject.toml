@@ -29,6 +29,7 @@ dev = [
     # Needed only by scripts/configure_ragflow_models.py: RAGFlow's auth endpoints
     # expect RSA-encrypted passwords, produced with the same library RAGFlow uses.
     "pycryptodomex>=3.20",
+    "asgi-lifespan>=2.1.0",
 ]
 
 [tool.pytest.ini_options]

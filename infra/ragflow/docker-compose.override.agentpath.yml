@@ -34,19 +34,32 @@ services:
       - ${AGENTPATH_EMBEDDER_MODEL}
       - --port
       - "80"
-      # bge-m3 is an XLM-R large model. TEI sizes its workspace from
-      # max-batch-tokens, so this cap is what keeps resident memory in the low
-      # gigabytes instead of the ~21 GB TEI's defaults would reserve.
+      # bge-m3 is an XLM-R large model and the ONNX runtime sizes its arena from
+      # max-batch-tokens. Left at TEI's defaults the container settled at 7.5 GB
+      # resident; at 8192 tokens it could not finish warm-up inside a 4 GB cap and
+      # restart-looped 93 times. 2048 tokens is still four of our ~512-token
+      # chunks per batch, which is ample: a query embeds one short string, and
+      # ingestion is a one-off pass over 31 chunks.
       - --max-batch-tokens
-      - "8192"
+      - "2048"
       - --max-client-batch-size
-      - "16"
+      - "8"
       - --auto-truncate
     environment:
       - HUGGINGFACE_HUB_CACHE=/data
       - HF_HOME=/data
+      # Each ONNX Runtime worker keeps its own memory arena, so the thread count
+      # is a memory knob as much as a speed one. 8 of 20 threads is plenty here.
+      - OMP_NUM_THREADS=8
+      - RAYON_NUM_THREADS=8
     volumes:
       - agentpath_embedder_cache:/data
+    # Hard ceiling. Measured at 7.5 GB resident without one, which is too much to
+    # take from a developer machine that is also running an IDE and a browser.
+    # The ONNX runtime sizes its arena from max-batch-tokens, so 4 GB is enough
+    # for the capped batch above; the container is killed rather than allowed to
+    # grow past it, which is the honest failure mode.
+    mem_limit: 5g
     ports:
       # Loopback only, for verification from the host.
       - ${AGENTPATH_EMBEDDER_PORT}:80
@@ -88,21 +101,28 @@ services:
       - HF_HOME=/data
     volumes:
       - agentpath_reranker_cache:/data
+    # The model lives in VRAM here, so host RAM is only weights staging and the
+    # HTTP layer.
+    mem_limit: 3g
     ports:
       # Loopback only. Published so the verification script and tests can reach
       # it directly from the host without entering the container.
       - ${AGENTPATH_RERANKER_PORT}:80
     networks:
       - ragflow
-    # Roughly 2.5 GB of VRAM. The embedder deliberately stays on CPU so the rest
-    # of the 8 GB remains available for Stage 2 answer generation.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # GPU reservation kept here but inert: on this host, CUDA init fails inside
+    # the container (CUDA_ERROR_UNKNOWN) even though nvidia-smi works and devices
+    # plus driver libraries are injected, so TEI falls back to CPU. Both the
+    # 89-1.8 and 89-latest images behave identically, which rules out the image.
+    # Re-enable by uncommenting once container CUDA works on this driver branch
+    # (see docs/TROUBLESHOOTING.md).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:80/health || exit 1"]
       interval: 15s

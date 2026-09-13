@@ -154,8 +154,15 @@ class RAGFlowClient:
     # -- system ------------------------------------------------------------ #
 
     async def healthz(self) -> dict[str, Any]:
-        """System health. Also the cheapest way to verify the API key works."""
-        return await self._request("GET", "/api/v1/system/healthz")
+        """System health, per component.
+
+        This endpoint answers outside the usual ``{code, data}`` envelope - it
+        returns the component map directly, e.g.
+        ``{"db": "ok", "doc_engine": "ok", "redis": "ok", "storage": "ok",
+        "status": "ok"}`` - so envelope parsing is switched off here.
+        """
+        payload = await self._request("GET", "/api/v1/system/healthz", expect_envelope=False)
+        return payload if isinstance(payload, dict) else {"status": str(payload)}
 
     # -- retrieval --------------------------------------------------------- #
 

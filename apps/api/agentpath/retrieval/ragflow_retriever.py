@@ -158,7 +158,7 @@ class RAGFlowRetriever:
     async def health(self) -> DependencyHealth:
         started = time.perf_counter()
         try:
-            await self._client.healthz()
+            components = await self._client.healthz()
         except RAGFlowUnavailable as exc:
             return DependencyHealth(name="ragflow", reachable=False, detail=str(exc))
         except RAGFlowError as exc:
@@ -170,11 +170,27 @@ class RAGFlowRetriever:
                 detail=str(exc),
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
+
+        latency_ms = (time.perf_counter() - started) * 1000
+        # Report per-component state: "RAGFlow is up but Elasticsearch is not" is
+        # a different problem from "RAGFlow is down", and both are reachable here.
+        degraded = sorted(
+            name
+            for name, state in components.items()
+            if name != "status" and isinstance(state, str) and state.lower() != "ok"
+        )
+        if degraded:
+            return DependencyHealth(
+                name="ragflow",
+                reachable=True,
+                detail=f"degraded components: {', '.join(degraded)}",
+                latency_ms=latency_ms,
+            )
         return DependencyHealth(
             name="ragflow",
             reachable=True,
-            detail=f"dataset {self._dataset_name!r}",
-            latency_ms=(time.perf_counter() - started) * 1000,
+            detail=f"all components ok, dataset {self._dataset_name!r}",
+            latency_ms=latency_ms,
         )
 
 
