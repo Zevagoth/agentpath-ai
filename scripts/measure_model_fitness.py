@@ -99,17 +99,28 @@ def words(text: str) -> set[str]:
     return {w for w in re.split(r"[^\w\u0600-\u06FF]+", text.lower()) if len(w) > MIN_WORD_LENGTH}
 
 
+def arabic_ratio(text: str) -> float:
+    """Share of the letters in *text* that are Arabic script. 0.0 for no letters."""
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for c in letters if ARABIC_RANGE.match(c)) / len(letters)
+
+
 def is_arabic(text: str, *, minimum_ratio: float = 0.3) -> bool:
     """Whether *text* is written in Arabic script.
 
     A ratio, not containment: an English answer quoting one Arabic word would
     pass containment, and a correct Arabic answer *must* contain English control
     labels and procedure ids, so "entirely Arabic" would fail every good answer.
+
+    What the ratio is taken over matters as much as the threshold - see
+    :func:`model_authored_text`.
     """
     letters = [c for c in text if c.isalpha()]
     if not letters:
         return False
-    return sum(1 for c in letters if ARABIC_RANGE.match(c)) / len(letters) >= minimum_ratio
+    return arabic_ratio(text) >= minimum_ratio
 
 
 # --------------------------------------------------------------------------- #
@@ -247,6 +258,35 @@ def answer_text(result: AnswerResult) -> str:
     return " ".join(
         [result.summary, result.customer_wording or "", result.escalation or ""]
         + list(result.conditions)
+        + list(result.clarifying_questions)
+        + [step.instruction for step in result.steps]
+    )
+
+
+def model_authored_text(result: AnswerResult) -> str:
+    """The parts of the answer whose wording is the model's, for the language check.
+
+    :func:`answer_text` is the right corpus for the *claim* checks - an invented
+    fact is worth finding wherever it appears. It is the wrong corpus for a
+    language check, because it includes ``result.conditions``: the procedure's own
+    ``applies_when``, ``does_not_apply_when``, ``decision_branch`` and
+    ``escalation_*`` lines, attached by the server, quoted verbatim, and always in
+    English by design so an agent can match them against the source document.
+
+    Measured on the ``ar-arrived`` case: 1173 of 1755 letters - 67% of the body -
+    were that English block, against 299 letters of Arabic step text, giving a
+    ratio of 0.289 for an answer whose every model-written sentence was Arabic. The
+    metric therefore scored a *shorter* Arabic answer as *less* Arabic: the same
+    case with ten steps instead of six passed at 0.510 on identical wording
+    quality. That is a property of the denominator, not of the answer.
+
+    So the language of the answer is measured over what the model actually wrote.
+    English control labels and procedure ids stay in - they belong in a correct
+    Arabic answer, which is why :func:`is_arabic` is a ratio and not a containment
+    test - and server-attached structured source data stays out.
+    """
+    return " ".join(
+        [result.summary, result.customer_wording or "", result.escalation or ""]
         + list(result.clarifying_questions)
         + [step.instruction for step in result.steps]
     )
@@ -419,6 +459,11 @@ class Run:
     labels_checkable: int = 0
     label_complaints: list[str] = field(default_factory=list)
     language_ok: bool | None = None
+    #: Arabic-letter ratio of the model-written text, and of the whole body
+    #: including the server-attached English condition block. Both are reported so
+    #: the effect of excluding that block is auditable rather than asserted.
+    language_ratio: float = 0.0
+    language_ratio_with_conditions: float = 0.0
     injection_obeyed: bool = False
     peak_vram_mib: int | None = None
     #: Steps the case declared necessary that the answer did not contain, counted
@@ -455,7 +500,11 @@ async def run_case(service: AnswerService, case: Case, catalogue: ProcedureCatal
     run.unsupported = find_unsupported_claims(result, catalogue)
     run.correct_attributions, run.checkable_attributions, run.attribution_complaints = attribution(result, catalogue)
     run.labels_kept, run.labels_checkable, run.label_complaints = control_labels(result, arabic=case.expect_arabic)
-    run.language_ok = is_arabic(body) if case.expect_arabic else not is_arabic(body)
+    # Measured over the model's own wording. See `model_authored_text`.
+    authored = model_authored_text(result)
+    run.language_ratio = arabic_ratio(authored)
+    run.language_ratio_with_conditions = arabic_ratio(body)
+    run.language_ok = is_arabic(authored) if case.expect_arabic else not is_arabic(authored)
     run.injection_obeyed = case.injected and any(marker in body.lower() for marker in INJECTION_MARKERS)
 
     # Did shortening the answer cost a step the question needs?
@@ -614,9 +663,41 @@ def report(runs: list[Run], *, repeats: int, model: str, catalogue: ProcedureCat
     print(f"   English control labels preserved  : {labels_kept}/{labels_checkable} = {label_rate:.0%}")
     if not labels_checkable:
         print("   (no answer named a control, so the criterion was not exercised)")
+
+    # Measured over the model's own wording, not over the whole response body: the
+    # response also carries the procedure's English condition lines verbatim. Both
+    # ratios are printed so the effect of that choice can be checked rather than
+    # taken on trust. See `model_authored_text` for the measurement that forced it.
+    arabic_runs = [run for run in language_runs if run.case.expect_arabic]
+    if arabic_runs:
+        diluted_ok = sum(1 for run in arabic_runs if run.language_ratio_with_conditions >= 0.3)
+        print("\n   Arabic ratio per Arabic case (threshold 0.30)")
+        print("     case            model-written   whole body incl. English conditions")
+        for run in arabic_runs:
+            print(
+                f"     {run.case.key:14s} {run.language_ratio:13.3f}"
+                f"   {run.language_ratio_with_conditions:.3f}"
+                f"{'' if run.language_ratio_with_conditions >= 0.3 else '   <- below, on quoted source text'}"
+            )
+        print(
+            f"   measured over the whole body instead, this would read "
+            f"{diluted_ok + len(language_runs) - len(arabic_runs)}/{len(language_runs)}"
+        )
+
     for run in generated:
         for complaint in run.label_complaints:
             print(f"   {run.case.key}: {complaint}")
+    # A model-written field left in the wrong language is worth naming even when
+    # the overall ratio passes.
+    for run in arabic_runs:
+        for label, text in (
+            ("summary", run.result.summary),
+            ("customer_wording", run.result.customer_wording or ""),
+            ("escalation", run.result.escalation or ""),
+        ):
+            if text.strip() and arabic_ratio(text) < 0.3:
+                print(f"   {run.case.key}: {label} is not in Arabic ({arabic_ratio(text):.2f})")
+                break
 
     print(f"\n{'-' * 78}\n6. Latency (warm)\n{'-' * 78}")
     print(
@@ -721,7 +802,20 @@ def report(runs: list[Run], *, repeats: int, model: str, catalogue: ProcedureCat
         "nonexistent_citations": nonexistent,
         "attribution": {"correct": attributed, "checkable": checkable, "rate": attribution_rate},
         "control_labels": {"kept": labels_kept, "checkable": labels_checkable, "rate": label_rate},
-        "language": {"ok": language_ok, "total": len(language_runs), "rate": language_rate},
+        "language": {
+            "ok": language_ok,
+            "total": len(language_runs),
+            "rate": language_rate,
+            "measured_over": "model-authored text; server-attached English condition lines excluded",
+            "arabic_ratios": {
+                run.case.key: {
+                    "model_written": round(run.language_ratio, 3),
+                    "whole_body": round(run.language_ratio_with_conditions, 3),
+                }
+                for run in language_runs
+                if run.case.expect_arabic
+            },
+        },
         "injection_obeyed": injection_obeyed,
         "abstained_without_model": all(not run.result.model_called for run in expected_abstain),
         "latency_s": {
