@@ -7,7 +7,7 @@ engine is a change to :func:`build_retriever` and nothing else.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 import structlog
@@ -18,6 +18,7 @@ from agentpath.query.lexicon import Lexicon, load_lexicon
 from agentpath.retrieval.ports import Retriever
 from agentpath.retrieval.ragflow_client import RAGFlowClient
 from agentpath.retrieval.ragflow_retriever import RAGFlowRetriever
+from agentpath.screenshots import ScreenshotCatalogue
 from agentpath.search_service import SearchService
 
 logger = structlog.get_logger(__name__)
@@ -32,6 +33,9 @@ class ServiceContext:
     client: RAGFlowClient
     retriever: Retriever
     search: SearchService
+    #: Defaulted so every existing constructor call - tests, the CLI, the
+    #: evaluation harness - keeps working and simply serves no screenshots.
+    screenshots: ScreenshotCatalogue = field(default_factory=ScreenshotCatalogue.empty)
 
     async def aclose(self) -> None:
         await self.client.aclose()
@@ -103,8 +107,18 @@ def build_retriever(settings: Settings, client: RAGFlowClient) -> Retriever:
 
 
 def build_context(settings: Settings) -> ServiceContext:
-    """Build the object graph. Cheap and synchronous; no network calls."""
+    """Build the object graph. Cheap and synchronous; no network calls.
+
+    Two local reads happen here and both are deliberate. The lexicon is one YAML
+    file. The screenshot catalogue is one small JSON sidecar and one PNG per
+    committed screenshot - three of each in the Stage 2A slice, ~650 KiB and three
+    sha256 digests, single-digit milliseconds - read once at startup precisely so
+    that no JSON parsing and no image hashing can happen while a request is in
+    flight. Both are still local filesystem reads with no network calls, which is
+    what "cheap and synchronous" is promising.
+    """
     lexicon = load_lexicon(settings.lexicon_file)
+    screenshots = ScreenshotCatalogue.load(settings.screenshots_dir)
     client = RAGFlowClient(
         settings.ragflow_base_url,
         settings.ragflow_api_key.get_secret_value(),
@@ -121,6 +135,7 @@ def build_context(settings: Settings) -> ServiceContext:
         vector_similarity_weight=settings.vector_similarity_weight,
         lexicon_version=lexicon.version,
         lexicon_concepts=len(lexicon.concepts),
+        screenshots=len(screenshots),
     )
     return ServiceContext(
         settings=settings,
@@ -128,4 +143,5 @@ def build_context(settings: Settings) -> ServiceContext:
         client=client,
         retriever=retriever,
         search=search,
+        screenshots=screenshots,
     )

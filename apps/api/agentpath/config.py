@@ -13,6 +13,7 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agentpath.paths import lexicon_path, repo_root
+from agentpath.paths import screenshots_dir as screenshots_directory
 
 
 class Settings(BaseSettings):
@@ -99,6 +100,11 @@ class Settings(BaseSettings):
     # -- search behaviour -------------------------------------------------- #
     top_procedures: int = Field(default=3, ge=1, le=10, validation_alias="AGENTPATH_TOP_PROCEDURES")
     lexicon_file: Path = Field(default_factory=lexicon_path, validation_alias="AGENTPATH_LEXICON_PATH")
+    # The only directory the screenshot route can serve from. Overridable for the
+    # same reason the lexicon path is: a container mounts the data elsewhere.
+    screenshots_dir: Path = Field(
+        default_factory=screenshots_directory, validation_alias="AGENTPATH_SCREENSHOTS_DIR"
+    )
 
     # Evidence thresholds.
     #

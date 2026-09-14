@@ -47,3 +47,10 @@ extend-exclude = [".external", "data/synthetic/build"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+
+[tool.ruff.lint.isort]
+# The three workspace members are installed into the virtualenv, so ruff would
+# otherwise sort them as third-party and split imports of our own code across two
+# blocks. Naming them keeps `agentpath` and `agentpath_ingestion` together, which
+# is what they are.
+known-first-party = ["agentpath", "agentpath_eval", "agentpath_ingestion"]

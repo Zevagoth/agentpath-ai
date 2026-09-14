@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agentpath.domain import EvidenceLevel, Language, ProcedureHit, RetrievalMode, SearchResult
 from agentpath.evidence import ABSTENTION_MESSAGE
+from agentpath.screenshots import SCREENSHOT_MEDIA_TYPE, Screenshot, ScreenshotCatalogue
 
 
 class SearchRequest(BaseModel):
@@ -75,6 +76,96 @@ class QueryUnderstanding(BaseModel):
     requested_product_line: str | None = None
 
 
+class HighlightBox(BaseModel):
+    """Where the highlighted control sits in a screenshot, in CSS pixels.
+
+    Top-left origin, ``deviceScaleFactor`` 1, measured from the live element by
+    the generator. Given the image's own ``width`` and ``height``, the UI can
+    scale this box to whatever size it renders the image at.
+    """
+
+    control_name: str
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+class LocalizedDescription(BaseModel):
+    """The bilingual description of what a screenshot shows."""
+
+    en: str
+    ar: str
+
+
+class ScreenshotRef(BaseModel):
+    """The screenshot that illustrates a retrieved passage.
+
+    Two identifier spaces meet here and only one of them is safe to publish.
+    RAGFlow's own handle is ``img_id``, shaped ``"{dataset_id}-{chunk_id}"``,
+    carried internally as ``Passage.image_id``. It is deliberately *not* in this
+    model: it is meaningless outside the one RAGFlow instance that minted it, it
+    changes whenever a document is re-uploaded or re-parsed, and fetching it needs
+    a RAGFlow credential a browser must never be given. ``screenshot_id`` is the
+    stable ``agentdesk-*`` name, which is committed in the repository and is what
+    this API serves.
+
+    ``url`` is issued by the server, already complete. No client concatenates
+    anything to reach an image, which is the point: the only URLs in circulation
+    are ones the server minted from its own catalogue.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    screenshot_id: str = Field(description="Stable screenshot name, e.g. `agentdesk-booking-detail-status`.")
+    url: str = Field(description="Path on this API that returns the PNG. Server-issued; do not construct it.")
+    media_type: str = Field(description="Content type the URL returns.")
+    width: int
+    height: int
+    bytes: int
+    sha256: str = Field(description="Digest of the bytes the URL returns, verified when the service started.")
+    procedure_id: str
+    procedure_version: str
+    step_order: int = Field(description="Which step of the procedure this screenshot illustrates.")
+    screen_name: str = Field(description="The console screen shown, e.g. `Booking Detail`.")
+    control_name: str = Field(description="The control the step acts on, e.g. `Booking status chip`.")
+    description: LocalizedDescription
+    watermark: str = Field(description="The synthetic-data banner rendered into the image.")
+    language: str = Field(description="Language of the console labels in the image.")
+    highlight: HighlightBox | None = None
+
+    @classmethod
+    def from_screenshot(cls, screenshot: Screenshot) -> ScreenshotRef:
+        return cls(
+            screenshot_id=screenshot.screenshot_id,
+            url=screenshot.url_path,
+            media_type=SCREENSHOT_MEDIA_TYPE,
+            width=screenshot.width,
+            height=screenshot.height,
+            bytes=screenshot.byte_count,
+            sha256=screenshot.sha256,
+            procedure_id=screenshot.procedure_id,
+            procedure_version=screenshot.procedure_version,
+            step_order=screenshot.step_order,
+            screen_name=screenshot.screen_name,
+            control_name=screenshot.control_name,
+            description=LocalizedDescription(en=screenshot.description_en, ar=screenshot.description_ar),
+            watermark=screenshot.watermark,
+            language=screenshot.language,
+            highlight=(
+                HighlightBox(
+                    control_name=screenshot.highlight.control_name,
+                    x=screenshot.highlight.x,
+                    y=screenshot.highlight.y,
+                    width=screenshot.highlight.width,
+                    height=screenshot.highlight.height,
+                )
+                if screenshot.highlight is not None
+                else None
+            ),
+        )
+
+
 class Citation(BaseModel):
     """A retrieved passage, with the scores that put it there."""
 
@@ -88,6 +179,51 @@ class Citation(BaseModel):
     semantic_score: float | None = Field(
         default=None, description="Vector similarity contribution."
     )
+    # Additive, and optional in the strong sense: `null` whenever the passage does
+    # not name a screenshot this service holds, which is the case for every
+    # procedure outside the Stage 2A slice. A client written against the Stage 1
+    # contract reads the fields above and is unaffected.
+    screenshot: ScreenshotRef | None = Field(
+        default=None,
+        description=(
+            "The screenshot illustrating this passage's step, when one exists. "
+            "Discovery happens here rather than through a listing route: a client only "
+            "ever needs the screenshot for a step it is already showing."
+        ),
+    )
+
+
+def _screenshot_for(content: str, screenshots: ScreenshotCatalogue) -> ScreenshotRef | None:
+    """Map a retrieved chunk to the screenshot it depicts, if any.
+
+    The chunk's own text is the mapping. Three alternatives were available and
+    each was rejected:
+
+    * ``Passage.image_id`` - RAGFlow's ``"{dataset_id}-{chunk_id}"``. It says an
+      image exists but not *which* screenshot it is, it is local to one RAGFlow
+      instance, and ``chunk_id`` is ``xxhash64(content + document_id)`` so it moves
+      whenever a document is re-uploaded. It is also the wrong direction: it
+      points at RAGFlow's copy, which needs a credential.
+    * The build manifest ``data/synthetic/build/visual_chunks.json``, which maps
+      chunk id to screenshot id. It is gitignored, describes one machine's RAGFlow,
+      and goes stale the moment a re-parse changes a chunk id - the API would then
+      serve a screenshot reference for a chunk that no longer exists, or none for
+      one that does.
+    * The citation token ``NW-HTL-014#S01``. Present verbatim in both kinds of
+      chunk, but the sidecars the catalogue is built from record ``step_order``,
+      not ``step_id``, so turning a token into a screenshot would mean loading the
+      procedure YAML in the API - exactly the ingestion-time work the import-graph
+      guarantee exists to keep off the request path.
+
+    The screenshot id needs none of that. It is in the rendered Markdown under the
+    step heading and in ``build_visual_chunk_content``'s output, it is the
+    catalogue's own key, and it is the id the serving route resolves - so the
+    mapping is an exact match against a set we already hold.
+    """
+    if not screenshots:
+        return None
+    screenshot = screenshots.for_chunk_text(content)
+    return ScreenshotRef.from_screenshot(screenshot) if screenshot is not None else None
 
 
 class ProcedureCard(BaseModel):
@@ -105,7 +241,14 @@ class ProcedureCard(BaseModel):
     citations: list[Citation]
 
     @classmethod
-    def from_hit(cls, hit: ProcedureHit) -> ProcedureCard:
+    def from_hit(cls, hit: ProcedureHit, screenshots: ScreenshotCatalogue | None = None) -> ProcedureCard:
+        """Build the card.
+
+        *screenshots* defaults to ``None``, which means "serve no screenshot
+        references". Every existing caller keeps working and gets the Stage 1
+        response verbatim.
+        """
+        catalogue = screenshots or ScreenshotCatalogue.empty()
         return cls(
             rank=hit.rank,
             procedure_id=hit.procedure_id,
@@ -128,6 +271,7 @@ class ProcedureCard(BaseModel):
                     semantic_score=(
                         round(passage.semantic_score, 4) if passage.semantic_score is not None else None
                     ),
+                    screenshot=_screenshot_for(passage.content, catalogue),
                 )
                 for passage in hit.passages
             ],
@@ -161,7 +305,7 @@ class SearchResponse(BaseModel):
     diagnostics: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
-    def from_result(cls, result: SearchResult) -> SearchResponse:
+    def from_result(cls, result: SearchResult, screenshots: ScreenshotCatalogue | None = None) -> SearchResponse:
         prepared = result.query
         return cls(
             mode=result.mode,
@@ -191,7 +335,7 @@ class SearchResponse(BaseModel):
                 abstained=result.abstained,
                 message=ABSTENTION_MESSAGE if result.abstained else None,
             ),
-            procedures=[ProcedureCard.from_hit(hit) for hit in result.hits],
+            procedures=[ProcedureCard.from_hit(hit, screenshots) for hit in result.hits],
             conflicts=list(result.conflicts),
             timings_ms=dict(result.timings_ms),
             diagnostics=dict(result.diagnostics),

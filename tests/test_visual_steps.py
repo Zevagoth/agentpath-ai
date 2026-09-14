@@ -21,6 +21,8 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
+
 from agentpath_ingestion.dataset import (
     LoadedProcedure,
     find_forbidden_brand_tokens,
@@ -36,7 +38,6 @@ from agentpath_ingestion.visual_steps import (
     find_screenshot_gaps,
     load_visual_steps,
 )
-from pydantic import ValidationError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -184,6 +185,9 @@ def test_a_visual_step_joins_the_procedure_step_to_its_sidecar(fake_repo: Path) 
     assert visual.control_name == "Test chip"
     assert visual.instruction == "Open the test screen and read the chip"
     assert visual.expected_result == "The chip reads Confirmed"
+    # The fake procedure's step has no Arabic instruction, and the field says so
+    # rather than carrying an empty string.
+    assert visual.instruction_ar is None
 
     # The image and its description.
     assert visual.image_path == f"{SCREENSHOT_PATH_PREFIX}{SCREENSHOT_ID}.png"
@@ -219,6 +223,9 @@ def test_the_stage_2a_slice_loads_from_the_committed_screenshots(
         assert (REPO_ROOT / item.image_path).is_file()
         assert item.ocr_text is None
         assert item.dom_text.strip()
+        # Carried from the YAML, because the chunk built from this record has to
+        # be retrievable by an Arabic query.
+        assert item.instruction_ar, item.citation
 
 
 def test_the_citation_appears_verbatim_in_the_rendered_document(

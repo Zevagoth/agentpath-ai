@@ -18,6 +18,8 @@ from agentpath.retrieval.ragflow_client import RAGFlowClient, RAGFlowError
 from agentpath_ingestion.dataset import DatasetError, build_dir, load_procedures, procedures_dir
 from agentpath_ingestion.ingest import IngestionError, IngestionReport, IngestionService, smoke_search
 from agentpath_ingestion.render import render, write_build
+from agentpath_ingestion.visual_chunks import VisualChunkError, VisualChunkReport
+from agentpath_ingestion.visual_steps import VisualStepError
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
@@ -73,8 +75,7 @@ def _require_credentials() -> None:
     settings = get_settings()
     if not settings.has_ragflow_credentials:
         raise SystemExit(
-            "RAGFLOW_API_KEY is not set in .env.local.\n"
-            "Run: make models   (registers the models and stores an API key)"
+            "RAGFLOW_API_KEY is not set in .env.local.\nRun: make models   (registers the models and stores an API key)"
         )
 
 
@@ -94,6 +95,36 @@ def _print_report(report: IngestionReport) -> None:
         f"total: {len(report.outcomes)} document(s), {report.total_chunks} chunk(s)"
         + (f", {report.elapsed_seconds:.1f}s" if report.elapsed_seconds else "")
     )
+    if report.visual is not None:
+        _print_visual(report.visual)
+
+
+def _print_visual(visual: VisualChunkReport) -> None:
+    """Print the screenshot-chunk state, including everything that is not there.
+
+    A screenshot that never arrived has to look different from a step that has no
+    screenshot, so gaps and blocks are printed even when there is nothing to
+    celebrate.
+    """
+    print()
+    print("visual chunks (one screenshot per step)")
+    if not visual.outcomes:
+        print("  none attached")
+    else:
+        print(f"  {'citation':<16} {'action':<15} {'image':<6} {'chunk id':<18} screenshot")
+        print(f"  {'-' * 16} {'-' * 15} {'-' * 6} {'-' * 18} {'-' * 10}")
+        for item in sorted(visual.outcomes, key=lambda o: (o.procedure_id, o.step_order)):
+            image = "yes" if item.has_image else ("BLOCKED" if item.image_blocked else "no")
+            print(f"  {item.citation:<16} {item.action:<15} {image:<6} {item.chunk_id or '-':<18} {item.screenshot_id}")
+        summary = ", ".join(f"{action} {count}" for action, count in sorted(visual.actions.items()))
+        print(f"  {len(visual.with_image)}/{len(visual.outcomes)} carry an image  ({summary})")
+
+    if visual.gaps:
+        print()
+        print(f"  screenshots declared but not usable yet: {len(visual.gaps)}")
+        for gap in visual.gaps:
+            print(f"    {gap.procedure_id}#{gap.step_id} ({gap.screenshot_id}): {gap.problems[0]}")
+        print("    these steps are ingested without a screenshot; run: make screenshots")
 
 
 async def _run_ingest(force: bool) -> int:
@@ -115,8 +146,36 @@ async def _run_ingest(force: bool) -> int:
         unparsed = [o.procedure_id for o in report.outcomes if o.chunk_count == 0]
         print(f"\nnot searchable yet: {', '.join(unparsed)}", file=sys.stderr)
         return 1
+    if _report_visual_problems(report.visual) != 0:
+        return 1
     print("\nevery procedure is parsed and searchable")
+    if report.visual and report.visual.outcomes:
+        print(f"{len(report.visual.with_image)} step screenshot(s) attached as image-bearing chunks")
     return 0
+
+
+def _report_visual_problems(visual: VisualChunkReport | None) -> int:
+    """Fail loudly on a screenshot-less visual chunk. Never let it read as success.
+
+    A blocked image is the one outcome that re-running cannot fix, so it names the
+    remedy instead of just the symptom.
+    """
+    if visual is None or visual.ok:
+        return 0
+    print(file=sys.stderr)
+    for item in visual.blocked:
+        print(
+            f"image NOT stored for {item.citation} (chunk {item.chunk_id}): the chunk text is "
+            "there, the screenshot is not",
+            file=sys.stderr,
+        )
+    for item in visual.missing:
+        print(f"{item.action}: {item.citation} ({item.screenshot_id})", file=sys.stderr)
+    for citation in visual.orphaned:
+        print(f"orphaned: {citation} has no ingested document to attach to", file=sys.stderr)
+    if visual.remedy:
+        print(f"\nremedy: {visual.remedy}", file=sys.stderr)
+    return 1
 
 
 async def _run_verify() -> int:
@@ -152,14 +211,14 @@ async def _run_verify() -> int:
     if not chunks:
         print("\nsmoke search returned nothing; the index is not answering", file=sys.stderr)
         return 1
-    return 0
+    return _report_visual_problems(report.visual)
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
     _require_credentials()
     try:
         return asyncio.run(_run_ingest(force=args.force))
-    except (IngestionError, DatasetError) as exc:
+    except (IngestionError, DatasetError, VisualChunkError, VisualStepError) as exc:
         print(f"ingestion failed: {exc}", file=sys.stderr)
         return 1
     except RAGFlowError as exc:
@@ -171,7 +230,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     _require_credentials()
     try:
         return asyncio.run(_run_verify())
-    except (IngestionError, DatasetError) as exc:
+    except (IngestionError, DatasetError, VisualChunkError, VisualStepError) as exc:
         print(f"verification failed: {exc}", file=sys.stderr)
         return 1
     except RAGFlowError as exc:

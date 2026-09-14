@@ -30,6 +30,17 @@ def procedures_dir() -> Path:
     return data_dir() / "procedures"
 
 
+def screenshots_dir() -> Path:
+    """Where the committed screenshots and their sidecar JSON live.
+
+    The API serves these itself (see :mod:`agentpath.screenshots`), so this is
+    the one place that decides which directory is servable. Everything the
+    screenshot route reads is derived from this directory plus a validated id;
+    no request input ever contributes to a path.
+    """
+    return data_dir() / "screenshots"
+
+
 def build_dir() -> Path:
     return data_dir() / "build"
 

@@ -2,8 +2,9 @@
 
 Endpoints:
 
-* ``POST /api/search`` - the search pipeline: understand, retrieve, grade.
-* ``GET  /health``     - reachability of RAGFlow and the model sidecars.
+* ``POST /api/search``                    - the search pipeline: understand, retrieve, grade.
+* ``GET  /api/screenshots/{screenshot_id}`` - one committed AgentDesk capture, as PNG.
+* ``GET  /health``                        - reachability of RAGFlow and the model sidecars.
 
 Security posture: this service has no authentication and is bound to
 ``127.0.0.1`` by configuration. That is acceptable for a local proof of concept
@@ -34,8 +35,38 @@ from agentpath.api.schemas import (
 from agentpath.config import Settings, get_settings
 from agentpath.logging_setup import configure_logging
 from agentpath.retrieval.ports import RetrievalError, RetrievalUnavailable
+from agentpath.screenshots import (
+    MAX_SCREENSHOT_ID_LENGTH,
+    SCREENSHOT_MEDIA_TYPE,
+    SCREENSHOT_URL_PREFIX,
+)
 
 logger = structlog.get_logger(__name__)
+
+#: A rejected screenshot id is logged so a typo is diagnosable, and truncated
+#: first so a 4 KiB request path cannot bloat a log line. Tied to the validity
+#: bound: anything longer than this could not have been served anyway, so nothing
+#: diagnostic is lost.
+MAX_LOGGED_ID_LENGTH = MAX_SCREENSHOT_ID_LENGTH
+
+
+def _if_none_match(header: str | None) -> frozenset[str]:
+    """Parse ``If-None-Match`` into the set of entity tags it offers.
+
+    Only the shapes a real cache sends: a comma-separated list of quoted tags,
+    optionally weak-prefixed. ``*`` is not special-cased because this route has no
+    unsafe methods for it to guard.
+    """
+    if not header:
+        return frozenset()
+    tags = set()
+    for raw in header.split(","):
+        candidate = raw.strip()
+        if candidate.startswith("W/"):
+            candidate = candidate[2:].strip()
+        if candidate:
+            tags.add(candidate)
+    return frozenset(tags)
 
 
 def create_app(settings: Settings | None = None, context: ServiceContext | None = None) -> FastAPI:
@@ -72,6 +103,14 @@ def create_app(settings: Settings | None = None, context: ServiceContext | None 
 
     # The web app runs on a different loopback port, so the browser needs CORS.
     # Loopback origins only: this must not become a wildcard.
+    #
+    # This already covers the screenshot route and does not need widening. An
+    # `<img src>` load is not a CORS request at all - the browser fetches it and
+    # renders it without consulting these headers, and only a `crossorigin`
+    # attribute or a canvas read would make the response's origin matter. `GET` is
+    # allowed here in any case, so even a `fetch()` for the bytes from the console
+    # works. Adding an origin, a method or a header for the sake of images would
+    # have bought nothing.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"],
@@ -146,7 +185,83 @@ def create_app(settings: Settings | None = None, context: ServiceContext | None 
             product_line=payload.product_line,
             limit=payload.limit,
         )
-        return SearchResponse.from_result(result)
+        return SearchResponse.from_result(result, ctx.screenshots)
+
+    @app.get(
+        SCREENSHOT_URL_PREFIX + "/{screenshot_id}",
+        summary="Fetch one instructional screenshot",
+        responses={
+            200: {"content": {SCREENSHOT_MEDIA_TYPE: {}}, "description": "The PNG."},
+            304: {"description": "The client's cached copy is current."},
+            404: {"description": "No such screenshot."},
+        },
+        response_class=Response,
+    )
+    async def screenshot(request: Request, screenshot_id: str) -> Response:
+        """Serve a screenshot by id.
+
+        The security model, in full:
+
+        1. ``screenshot_id`` is validated for shape and length, then looked up in
+           the catalogue that :func:`~agentpath.api.deps.build_context` built at
+           startup by listing the screenshots directory. Anything that is not a
+           key in that catalogue is a 404.
+        2. **Request input never reaches a path operation.** There is no ``/``,
+           no ``os.path.join`` and no ``open`` on this code path at all - the
+           bytes were read at startup and are already in memory. Traversal has
+           nothing to traverse: the request only ever selects from a closed set.
+        3. Malformed and unknown ids get the byte-identical 404. A distinct 422
+           for "well-formed but absent" would be an oracle for enumerating the id
+           space, and the request input is not echoed back at all - reflecting it
+           would gain a caller nothing it does not already know and would put
+           attacker-chosen bytes in a response body.
+        4. No absolute path appears in the body, the headers or the log line.
+
+        What actually reaches this handler is narrower than it looks, and the
+        tests assert the observed split rather than assuming one. Starlette
+        percent-decodes the path *before* routing and the path parameter cannot
+        span a ``/``, so ``../../etc/passwd``, ``..%2f..%2f...`` and
+        ``%2e%2e%2f...`` never match this route at all - they 404 in the router.
+        What does arrive is anything that stays a single decoded segment: a
+        double-encoded ``%252e%252e%252f``, backslashes, a NUL byte, a 4000-byte
+        id, an uppercase id, a ``.png`` suffix, and a bare ``..`` from ``%2e%2e``.
+        Those are the cases step 1 exists for.
+
+        Caching: the sha256 is spent on a strong ``ETag`` rather than on a long
+        ``immutable`` lifetime. The bytes are immutable for a given digest, but
+        this URL is keyed by the stable id, so regenerating a capture replaces
+        what it returns. An hour of freshness plus revalidation gets the repeat
+        fetches off the wire without ever serving a stale image.
+        """
+        ctx: ServiceContext = request.app.state.context
+        record = ctx.screenshots.resolve(screenshot_id)
+        if record is None:
+            logger.info(
+                "screenshot.not_found",
+                # Bounded and character-restricted by the check that just failed;
+                # truncated anyway so a hostile id cannot bloat a log line.
+                requested=screenshot_id[:MAX_LOGGED_ID_LENGTH],
+                known=len(ctx.screenshots),
+            )
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={
+                    "error": "screenshot_not_found",
+                    "message": "No screenshot is available under that id.",
+                },
+                headers={"X-Content-Type-Options": "nosniff"},
+            )
+
+        headers = {
+            "ETag": record.etag,
+            "Cache-Control": "public, max-age=3600, must-revalidate",
+            # The body is a PNG whose type was verified against its magic bytes at
+            # startup, so there is no reason for a browser to guess anything else.
+            "X-Content-Type-Options": "nosniff",
+        }
+        if record.etag in _if_none_match(request.headers.get("if-none-match")):
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+        return Response(content=record.image, media_type=SCREENSHOT_MEDIA_TYPE, headers=headers)
 
     @app.get("/health", response_model=HealthResponse, summary="Dependency health")
     async def health(request: Request, response: Response) -> HealthResponse:

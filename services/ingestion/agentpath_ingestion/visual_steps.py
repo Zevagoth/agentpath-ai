@@ -86,6 +86,11 @@ class VisualStep(BaseModel):
     screen_name: str = Field(min_length=1)
     control_name: str = Field(min_length=1)
     instruction: str = Field(min_length=10)
+    instruction_ar: str | None = Field(
+        default=None,
+        min_length=5,
+        description="The step's Arabic instruction from the procedure YAML, when it has one.",
+    )
     expected_result: str | None = Field(default=None, min_length=5)
     screenshot_id: str = Field(pattern=SCREENSHOT_ID_PATTERN)
     image_path: str = Field(description="Repository-relative POSIX path to the PNG.")
@@ -144,6 +149,46 @@ def sidecar_path(screenshot_id: str, directory: Path) -> Path:
     return directory / f"{screenshot_id}.json"
 
 
+def collect_visual_steps(
+    procedures: Sequence[LoadedProcedure],
+    *,
+    directory: Path | None = None,
+    root: Path | None = None,
+) -> tuple[list[VisualStep], list[ScreenshotGap]]:
+    """Build what can be built, and report what cannot, in a single pass.
+
+    This is the primitive the other two loaders are written in terms of, and the
+    one ingestion uses. Ingestion needs both halves at once: the vertical slice
+    has usable screenshots for exactly one procedure, so it must attach those and
+    still say out loud what is missing elsewhere. Getting the two halves from two
+    separate calls would hash and read every PNG twice and could disagree if the
+    directory changed in between.
+    """
+    directory = directory if directory is not None else screenshots_dir()
+    base = root if root is not None else repo_root()
+
+    steps: list[VisualStep] = []
+    gaps: list[ScreenshotGap] = []
+    for loaded in procedures:
+        procedure = loaded.procedure
+        for step in procedure.screenshot_steps:
+            visual, problems = _build(procedure, step, directory, base)
+            if visual is not None:
+                steps.append(visual)
+            if problems:
+                gaps.append(
+                    ScreenshotGap(
+                        procedure_id=procedure.procedure_id,
+                        step_id=step.step_id,
+                        step_order=step.number,
+                        screenshot_id=str(step.screenshot),
+                        problems=tuple(problems),
+                    )
+                )
+    steps.sort(key=lambda item: (item.procedure_id, item.step_order))
+    return steps, gaps
+
+
 def load_visual_steps(
     procedures: Sequence[LoadedProcedure],
     *,
@@ -155,26 +200,18 @@ def load_visual_steps(
     Strict by design. Every problem across every step is collected and raised
     together, so one run tells you everything that is wrong instead of making
     you fix them one at a time. Use :func:`find_screenshot_gaps` when you need
-    to know what is missing without failing.
+    to know what is missing without failing, or :func:`collect_visual_steps`
+    when you need both.
     """
-    directory = directory if directory is not None else screenshots_dir()
-    base = root if root is not None else repo_root()
-
-    steps: list[VisualStep] = []
-    failures: list[str] = []
-    for loaded in procedures:
-        procedure = loaded.procedure
-        for step in procedure.screenshot_steps:
-            visual, problems = _build(procedure, step, directory, base)
-            if visual is not None:
-                steps.append(visual)
-            failures += [
-                f"{procedure.procedure_id} {step.step_id} ({step.screenshot}): {problem}" for problem in problems
-            ]
-
-    if failures:
+    steps, gaps = collect_visual_steps(procedures, directory=directory, root=root)
+    if gaps:
+        failures = [
+            f"{gap.procedure_id} {gap.step_id} ({gap.screenshot_id}): {problem}"
+            for gap in gaps
+            for problem in gap.problems
+        ]
         raise VisualStepError("unusable screenshot metadata:\n  - " + "\n  - ".join(failures))
-    return sorted(steps, key=lambda item: (item.procedure_id, item.step_order))
+    return steps
 
 
 def find_screenshot_gaps(
@@ -190,25 +227,7 @@ def find_screenshot_gaps(
     gives a caller the list explicitly so the shortfall is visible and can be
     asserted on.
     """
-    directory = directory if directory is not None else screenshots_dir()
-    base = root if root is not None else repo_root()
-
-    gaps: list[ScreenshotGap] = []
-    for loaded in procedures:
-        procedure = loaded.procedure
-        for step in procedure.screenshot_steps:
-            _, problems = _build(procedure, step, directory, base)
-            if problems:
-                gaps.append(
-                    ScreenshotGap(
-                        procedure_id=procedure.procedure_id,
-                        step_id=step.step_id,
-                        step_order=step.number,
-                        screenshot_id=str(step.screenshot),
-                        problems=tuple(problems),
-                    )
-                )
-    return gaps
+    return collect_visual_steps(procedures, directory=directory, root=root)[1]
 
 
 def _build(procedure: Procedure, step: Step, directory: Path, base: Path) -> tuple[VisualStep | None, list[str]]:
@@ -248,6 +267,11 @@ def _build(procedure: Procedure, step: Step, directory: Path, base: Path) -> tup
             screen_name=step.screen,
             control_name=step.ui_element,
             instruction=step.instruction.strip(),
+            # Carried on the record rather than looked up again later: the chunk
+            # this feeds has to be retrievable by an Arabic query, and re-joining
+            # a step to its YAML downstream would be a second chance to pair the
+            # wrong texts together.
+            instruction_ar=(step.instruction_ar or "").strip() or None,
             expected_result=step.expected_result,
             screenshot_id=screenshot_id,
             image_path=str(raw.get("image_path") or ""),

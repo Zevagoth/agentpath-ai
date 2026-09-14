@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
+
 from agentpath_ingestion.cli import main as cli_main
 from agentpath_ingestion.dataset import (
     DatasetError,
@@ -33,7 +35,6 @@ from agentpath_ingestion.schema import (
     ProductLine,
     qualified_step_id,
 )
-from pydantic import ValidationError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_SESSION_ONE_IDS = {"NW-HTL-014", "NW-HTL-021", "NW-CXL-032", "NW-CXL-045", "NW-REF-018"}

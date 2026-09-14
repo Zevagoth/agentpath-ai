@@ -90,6 +90,10 @@ dataset: ## Render the synthetic procedures to Markdown
 ingest: ## Ingest the rendered procedures into RAGFlow
 	@uv run agentpath-ingest ingest
 
+.PHONY: ingest-force
+ingest-force: ## Re-upload every document, moving chunk ids to free image keys
+	@uv run agentpath-ingest ingest --force
+
 .PHONY: ingest-verify
 ingest-verify: ## Show ingestion status and chunk counts
 	@uv run agentpath-ingest verify

@@ -23,8 +23,14 @@ from typing import Any
 import structlog
 
 from agentpath.retrieval.ragflow_client import RAGFlowClient, RAGFlowError
-from agentpath_ingestion.dataset import load_procedures
+from agentpath_ingestion.dataset import LoadedProcedure, build_dir, load_procedures
 from agentpath_ingestion.render import RenderedProcedure, render
+from agentpath_ingestion.visual_chunks import (
+    VisualChunkReport,
+    attach_visual_chunks,
+    inspect_visual_chunks,
+    write_visual_chunk_manifest,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -75,6 +81,14 @@ class IngestionReport:
     embedding_model: str
     outcomes: list[DocumentOutcome] = field(default_factory=list)
     elapsed_seconds: float = 0.0
+    #: State of the image-bearing screenshot chunks. ``None`` only when the run
+    #: never got as far as looking.
+    visual: VisualChunkReport | None = None
+
+    @property
+    def document_ids(self) -> dict[str, str]:
+        """Procedure id -> RAGFlow document id, for everything that has one."""
+        return {o.procedure_id: o.document_id for o in self.outcomes if o.document_id}
 
     @property
     def created(self) -> list[DocumentOutcome]:
@@ -155,7 +169,8 @@ class IngestionService:
     async def ingest(self, *, force: bool = False) -> IngestionReport:
         """Bring RAGFlow's content in line with the rendered procedures."""
         started = time.perf_counter()
-        rendered = [render(item) for item in load_procedures()]
+        loaded = load_procedures()
+        rendered = [render(item) for item in loaded]
         dataset_id = await self.ensure_dataset()
 
         existing = {doc.get("name"): doc for doc in await self._client.list_documents(dataset_id)}
@@ -187,7 +202,13 @@ class IngestionService:
                 )
                 # A document that never finished parsing must be retried even when
                 # its text is unchanged, otherwise it stays invisible to search.
+                # Re-uploaded rather than re-parsed: a bare re-parse keeps the
+                # document id, so any screenshot orphaned in storage by the
+                # previous attempt still occupies the chunk id this run would
+                # write to, and the image could not be attached. A re-upload moves
+                # every chunk id to a free key.
                 if outcome.chunk_count == 0:
+                    outcome = await self._replace(dataset_id, current, document)
                     to_parse.append(outcome.document_id)
             report.outcomes.append(outcome)
 
@@ -196,9 +217,41 @@ class IngestionService:
             logger.info("ingest.parse_started", documents=len(to_parse))
             await self._wait_for_parsing(dataset_id, to_parse)
 
+        # Strictly after parsing. RAGFlow's parse deletes every chunk of a
+        # document, manual ones included, so anything attached earlier in this
+        # method would have been thrown away by the call above.
+        report.visual = await self._attach_visual_chunks(dataset_id, loaded, report)
+
+        # Counted last, so the reported chunk totals include the visual chunks.
         await self._refresh_counts(dataset_id, report)
         report.elapsed_seconds = time.perf_counter() - started
         return report
+
+    async def _attach_visual_chunks(
+        self, dataset_id: str, loaded: list[LoadedProcedure], report: IngestionReport
+    ) -> VisualChunkReport:
+        """Attach the screenshot chunks and record what was written.
+
+        A screenshot problem must not lose an otherwise good ingestion run, but it
+        must not pass unnoticed either: the failure is turned into a report the
+        CLI prints and exits non-zero on, rather than an exception that hides the
+        document outcomes above it.
+        """
+        visual = await attach_visual_chunks(
+            self._client,
+            dataset_id,
+            document_ids=report.document_ids,
+            procedures=loaded,
+        )
+        try:
+            path = write_visual_chunk_manifest(visual, build_dir())
+        except OSError as exc:
+            # The manifest is a report, not the source of truth, so failing to
+            # write it must not fail an ingestion that already succeeded.
+            logger.warning("ingest.visual_manifest_unwritten", error=str(exc))
+        else:
+            logger.info("ingest.visual_manifest", chunks=len(visual.outcomes), file=path.name)
+        return visual
 
     async def _create(self, dataset_id: str, document: RenderedProcedure) -> DocumentOutcome:
         document_id = await self._client.upload_document(
@@ -213,9 +266,7 @@ class IngestionService:
             action="created",
         )
 
-    async def _replace(
-        self, dataset_id: str, current: dict[str, Any], document: RenderedProcedure
-    ) -> DocumentOutcome:
+    async def _replace(self, dataset_id: str, current: dict[str, Any], document: RenderedProcedure) -> DocumentOutcome:
         """Replace an edited document.
 
         RAGFlow has no "replace content" call, so the old document is removed and
@@ -230,9 +281,7 @@ class IngestionService:
             action="updated",
         )
 
-    async def _apply_metadata(
-        self, dataset_id: str, document_id: str, document: RenderedProcedure
-    ) -> None:
+    async def _apply_metadata(self, dataset_id: str, document_id: str, document: RenderedProcedure) -> None:
         """Attach filterable metadata plus the content hash."""
         meta_fields = dict(document.metadata)
         meta_fields[SHA_FIELD] = document.sha256
@@ -306,12 +355,11 @@ class IngestionService:
 
     async def verify(self) -> IngestionReport:
         """Report what is actually in RAGFlow, without changing anything."""
-        rendered = {item.filename: item for item in (render(loaded) for loaded in load_procedures())}
+        loaded = load_procedures()
+        rendered = {item.filename: item for item in (render(item) for item in loaded)}
         dataset_id = await self._client.find_dataset_id(self._dataset_name)
         if not dataset_id:
-            raise IngestionError(
-                f"dataset {self._dataset_name!r} does not exist in RAGFlow. Run: make ingest"
-            )
+            raise IngestionError(f"dataset {self._dataset_name!r} does not exist in RAGFlow. Run: make ingest")
 
         report = IngestionReport(
             dataset_id=dataset_id,
@@ -352,6 +400,16 @@ class IngestionService:
                     status="absent",
                 )
             )
+
+        # Read-only, like the rest of verify: it lists chunks, reads image ids by
+        # id, and asks storage whether an object key is occupied. It writes
+        # nothing, so a blocked screenshot is reported here rather than repaired.
+        report.visual = await inspect_visual_chunks(
+            self._client,
+            dataset_id,
+            document_ids=report.document_ids,
+            procedures=loaded,
+        )
         return report
 
 
