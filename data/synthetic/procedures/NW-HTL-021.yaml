@@ -113,6 +113,9 @@ steps:
     expected_result: A supplier log entry names the person who reinstated the booking.
     screenshot: agentdesk-supplier-log
   - number: 6
+    # The name given to the guest here is the one captured in step 5, and the
+    # decision branches route back to "log it under step 5" for the same reason.
+    requires: [S05]
     instruction: >-
       Tell the guest the booking is reinstated, give them the name of the property
       contact, and send the written confirmation using template HTL-FOUND-01.

@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agentpath.case_context import CaseContext
 from agentpath.domain import EvidenceLevel, Language, ProcedureHit, RetrievalMode, SearchResult
 from agentpath.evidence import ABSTENTION_MESSAGE
-from agentpath.generation.answer_service import AnswerResult, AnswerStatus
+from agentpath.generation.answer_service import AnswerResult, AnswerStatus, StepSource
 from agentpath.screenshots import SCREENSHOT_MEDIA_TYPE, Screenshot, ScreenshotCatalogue
 
 
@@ -412,9 +412,10 @@ class AnswerRequest(BaseModel):
 class AnswerStepOut(BaseModel):
     """One instruction, with everything needed to verify it.
 
-    ``instruction`` is the only field the model wrote. Every other field was
-    attached by the server from the procedure catalogue after the model chose a
-    step id, which is why none of them can be invented.
+    ``instruction`` is the only field the model wrote, and only when ``source`` is
+    ``model``. Every other field was attached by the server from the procedure
+    catalogue after the model chose a step id, which is why none of them can be
+    invented.
     """
 
     instruction: str
@@ -428,6 +429,17 @@ class AnswerStepOut(BaseModel):
     )
     conditions: list[str] = Field(default_factory=list, description="Structured conditions that route into this step.")
     screenshot: ScreenshotRef | None = Field(default=None, description="The screenshot for this step, when one exists.")
+    source: StepSource = Field(
+        default=StepSource.MODEL,
+        description=(
+            "'model' means the model chose this step and wrote this instruction. 'prerequisite' means the "
+            "server inserted it, verbatim from the procedure, because a cited step declares it depends on it."
+        ),
+    )
+    requires: list[str] = Field(
+        default_factory=list,
+        description="Steps this one depends on, from the procedure. Explains why a prerequisite step is present.",
+    )
 
 
 class ContextUsed(BaseModel):
@@ -444,7 +456,15 @@ class ContextUsed(BaseModel):
     )
     unanswered: list[str] = Field(
         default_factory=list,
-        description="Information the procedure needs that the context could not supply.",
+        description="Information the procedure needs that the context could not supply, and that is worth asking for.",
+    )
+    not_collected: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Information the procedure requires that this system will not ask for, mapped to why. "
+            "These are identifiers and payment data the case-context contract rejects, so the agent "
+            "is never asked to supply them. Reported rather than dropped, so the policy is visible."
+        ),
     )
     completed_steps: list[str] = Field(default_factory=list, description="Steps the agent said they had already done.")
     product_line: str | None = Field(
@@ -494,6 +514,13 @@ class AnswerResponse(BaseModel):
         default_factory=list,
         description="Citations the model returned that the evidence did not support. Should be empty.",
     )
+    inserted_prerequisites: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Steps the server added because a cited step declared it depends on them. "
+            "Non-empty means the model's own step selection was incomplete."
+        ),
+    )
     context_used: ContextUsed
     timings_ms: dict[str, float]
     retrieval_metadata: dict[str, Any] = Field(default_factory=dict)
@@ -536,6 +563,8 @@ class AnswerResponse(BaseModel):
                     control_name=step.control_name,
                     conditions=list(step.conditions),
                     screenshot=reference,
+                    source=step.source,
+                    requires=list(step.requires),
                 )
             )
 
@@ -562,10 +591,12 @@ class AnswerResponse(BaseModel):
             model_called=result.model_called,
             failure_detail=result.failure_detail,
             dropped_citations=list(result.dropped_citations),
+            inserted_prerequisites=list(result.inserted_prerequisites),
             context_used=ContextUsed(
                 provided=list(use.provided),
                 applied=dict(use.applied),
                 unanswered=list(use.unanswered),
+                not_collected=dict(use.not_collected),
                 completed_steps=list(use.completed_steps),
                 product_line=use.product_line,
             ),

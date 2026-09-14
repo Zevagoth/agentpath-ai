@@ -27,6 +27,7 @@ from agentpath.generation.answer_service import (
     AnswerService,
     AnswerStatus,
     AnswerStep,
+    StepSource,
 )
 from agentpath.generation.evidence_assembly import (
     MAX_EVIDENCE_BLOCKS,
@@ -77,6 +78,7 @@ __all__ = [
     "OllamaModelMissing",
     "OllamaRuntimeOptions",
     "OllamaUnavailable",
+    "StepSource",
     "StructuredCompletion",
     "StructuredOutputError",
     "assemble_evidence",

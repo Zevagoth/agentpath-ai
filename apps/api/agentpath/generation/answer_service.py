@@ -57,7 +57,14 @@ from enum import StrEnum
 
 import structlog
 
-from agentpath.case_context import CaseContext, ContextUse, answers_requirement, describe_use, render_for_prompt
+from agentpath.case_context import (
+    CaseContext,
+    ContextUse,
+    answers_requirement,
+    describe_use,
+    refused_reason,
+    render_for_prompt,
+)
 from agentpath.config import Settings
 from agentpath.domain import EvidenceLevel, Language, SearchResult
 from agentpath.evidence import ABSTENTION_MESSAGE
@@ -69,7 +76,7 @@ from agentpath.generation.evidence_assembly import (
 )
 from agentpath.generation.ollama_client import OllamaClient, OllamaError, StructuredOutputError
 from agentpath.generation.prompt import DraftAnswer, build_answer_schema, build_prompt
-from agentpath.procedures import ProcedureCatalogue
+from agentpath.procedures import ProcedureCatalogue, StepRecord
 from agentpath.search_service import SearchService
 
 logger = structlog.get_logger(__name__)
@@ -97,7 +104,19 @@ def _already_known(question: str, context: CaseContext | None) -> bool:
     """
     if context is None or context.is_empty:
         return False
-    return answers_requirement(context, question) is not None
+    return bool(answers_requirement(context, question))
+
+
+def _must_not_be_asked(question: str) -> bool:
+    """Whether *question* asks for something the case-context contract refuses.
+
+    Applied to the model's own question as well as to the structured ones. The
+    structured list is already filtered at the source, but the model writes its
+    question freely and can ask for a booking reference in wording of its own -
+    and that question has no valid answer, because the field an agent would type it
+    into is rejected by design.
+    """
+    return refused_reason(question) is not None
 
 
 #: How many clarifying questions reach the agent. One, by product decision: an
@@ -112,6 +131,23 @@ UNGROUNDED_MESSAGE = (
     "A procedure was found, but no part of the generated answer could be traced to a step in it, "
     "so the answer was discarded."
 )
+
+
+class StepSource(StrEnum):
+    """Who wrote the wording of a step, so the response stays honest about it.
+
+    The two are not interchangeable to a reader. ``MODEL`` wording was generated
+    for this question and phrased for it. ``PREREQUISITE`` wording is the corpus's
+    own sentence, inserted by the server because a cited step declares it depends
+    on this one - nobody asked for it, and it is shown verbatim rather than
+    paraphrased precisely because the model never considered it.
+    """
+
+    MODEL = "model"
+    """The model chose this step and wrote this instruction."""
+
+    PREREQUISITE = "prerequisite"
+    """The server inserted this step, verbatim from the corpus, to satisfy a dependency."""
 
 
 class AnswerStatus(StrEnum):
@@ -151,6 +187,15 @@ class AnswerStep:
     screenshot_id: str | None = None
     screenshot_url: str | None = None
     conditions: tuple[str, ...] = ()
+    #: Whether the model wrote this instruction or the server inserted it to
+    #: satisfy a declared dependency. See :class:`StepSource`.
+    source: StepSource = StepSource.MODEL
+    #: Steps this one depends on, as bare ids, from the corpus. Carried so a
+    #: reader can see *why* an inserted step is present.
+    requires: tuple[str, ...] = ()
+    #: Position in the procedure, used to present steps in the order they are
+    #: performed rather than in the order the model happened to list them.
+    step_order: int = 0
 
     @property
     def citation(self) -> str:
@@ -184,6 +229,11 @@ class AnswerResult:
     #: Citations the model returned that the evidence did not support. Should
     #: always be empty while the ``enum`` holds; counted so a regression is data.
     dropped_citations: tuple[str, ...] = ()
+    #: Steps the server added because a cited step declared it depends on them.
+    #: Non-empty means the model's own selection was incomplete, which is worth
+    #: measuring rather than hiding: it is the difference between "the procedure
+    #: was followed" and "the procedure was followed because we enforced it".
+    inserted_prerequisites: tuple[str, ...] = ()
     timings_ms: Mapping[str, float] = field(default_factory=dict)
     retrieval_metadata: Mapping[str, object] = field(default_factory=dict)
     #: What the supplied case context actually did, so its effect is visible rather
@@ -334,11 +384,14 @@ class AnswerService:
             )
 
         prompt_started = time.perf_counter()
+        # An explicit context language overrides detection: the agent knows the
+        # customer better than a script detector does. Decided once, because a
+        # server-inserted prerequisite has to be written in the same language the
+        # model was told to answer in.
+        answer_language = context.language if context and context.language else result.query.language
         messages = build_prompt(
             question=result.query.original,
-            # An explicit context language overrides detection: the agent knows the
-            # customer better than a script detector does.
-            language=(context.language if context and context.language else result.query.language),
+            language=answer_language,
             evidence=evidence,
             case_facts=render_for_prompt(context),
         )
@@ -408,6 +461,11 @@ class AnswerService:
                 started=total_started,
             )
 
+        # Step ordering and step dependencies are enforced here, after validation
+        # and before the response is built, so no answer can present a step whose
+        # declared prerequisite is absent.
+        steps, inserted = self._with_prerequisites(steps, evidence=evidence, language=answer_language)
+
         needs_clarification = result.evidence is EvidenceLevel.PARTIAL or bool(result.conflicts)
         questions: tuple[str, ...] = ()
         if needs_clarification:
@@ -434,6 +492,9 @@ class AnswerService:
             # arrived when `customer_arrived` was supplied is the exact waste the
             # case-context contract exists to remove.
             candidates = [q for q in candidates if not _already_known(q, context)]
+            # And drop anything we would refuse to accept an answer to. Asking for
+            # a booking reference is not a clarification, it is a dead end.
+            candidates = [q for q in candidates if not _must_not_be_asked(q)]
             questions = tuple(dict.fromkeys(candidates))[:MAX_QUESTIONS_SHOWN]
 
         return self._finish(
@@ -453,6 +514,7 @@ class AnswerService:
                 evidence_reason=result.evidence_reason,
                 model_called=True,
                 dropped_citations=dropped,
+                inserted_prerequisites=inserted,
                 retrieval_metadata=metadata,
                 context_used=describe_use(
                     context,
@@ -490,6 +552,11 @@ class AnswerService:
             if block is None or not instruction:
                 dropped.append(citation or "(empty)")
                 continue
+            # The dependency list is read from the catalogue rather than added to
+            # the evidence contract: the model is not shown dependencies and must
+            # not be, or "S06 requires S05" becomes another instruction it can
+            # decline to follow. It is a server fact, resolved server-side.
+            record = self._catalogue.step(block.step_id)
             steps.append(
                 AnswerStep(
                     instruction=instruction,
@@ -503,9 +570,109 @@ class AnswerService:
                     screenshot_id=block.screenshot_id,
                     screenshot_url=self._screenshot_url(block.screenshot_id),
                     conditions=block.conditions,
+                    source=StepSource.MODEL,
+                    requires=record.requires if record is not None else (),
+                    step_order=block.step_order,
                 )
             )
         return tuple(steps), tuple(dict.fromkeys(dropped))
+
+    def _with_prerequisites(
+        self,
+        steps: tuple[AnswerStep, ...],
+        *,
+        evidence: AssembledEvidence,
+        language: Language,
+    ) -> tuple[tuple[AnswerStep, ...], tuple[str, ...]]:
+        """Add every step the cited steps depend on, then put them in procedure order.
+
+        This is the fix for a measured failure that no prompt wording repaired.
+        The model answered "how do I relocate a guest" by citing ``S06`` -
+        *present the shortlisted option* - without ``S05``, the step that produces
+        the shortlist. It was deterministic across repetitions, and S05 was in the
+        evidence the whole time: the model was not missing information, it was
+        making a selection, and asking it more nicely to select better is not a
+        guarantee. So the dependency is declared in the corpus and satisfied here.
+
+        Two choices worth stating. The dependent step is **kept** - dropping S06
+        would satisfy the constraint by removing the answer, which is worse than
+        the defect. And the inserted step carries the corpus's own sentence rather
+        than a generated one: the model never chose this step, so it has no
+        wording for it, and inventing wording on its behalf would be the guess
+        this design exists to remove. The Arabic side is used for an Arabic
+        answer, because the corpus is bilingual and a language gate is not
+        something to fail on text we inserted ourselves.
+
+        Ordering becomes the procedure's rather than the model's. A prerequisite
+        that appeared after its dependent would satisfy the letter of the
+        dependency and none of its purpose. Procedures keep their order of first
+        appearance, so a conflict answer still leads with the procedure the model
+        led with.
+        """
+        by_procedure: dict[str, list[str]] = {}
+        for step in steps:
+            by_procedure.setdefault(step.procedure_id, []).append(step.step_id)
+
+        present = {(step.procedure_id, step.step_id) for step in steps}
+        additions: list[AnswerStep] = []
+        for procedure_id, cited in by_procedure.items():
+            record = self._catalogue.procedure(procedure_id)
+            if record is None:
+                continue
+            for required in record.dependency_closure(cited):
+                if (procedure_id, required.citation) in present:
+                    continue
+                additions.append(self._prerequisite_step(required, evidence=evidence, language=language))
+
+        if not additions:
+            return tuple(sorted(steps, key=self._presentation_key(by_procedure))), ()
+
+        combined = tuple(sorted([*steps, *additions], key=self._presentation_key(by_procedure)))
+        inserted = tuple(step.step_id for step in additions)
+        logger.info("answer.prerequisites_inserted", steps=list(inserted))
+        return combined, inserted
+
+    @staticmethod
+    def _presentation_key(by_procedure: Mapping[str, list[str]]):
+        """Order by the procedure's first appearance, then by step number."""
+        rank = {procedure_id: index for index, procedure_id in enumerate(by_procedure)}
+        return lambda step: (rank.get(step.procedure_id, len(rank)), step.step_order)
+
+    def _prerequisite_step(
+        self,
+        step: StepRecord,
+        *,
+        evidence: AssembledEvidence,
+        language: Language,
+    ) -> AnswerStep:
+        """Build one server-inserted step from the corpus.
+
+        The evidence block is preferred when the step has one, so an inserted step
+        is indistinguishable from one the model could have cited - the block adds
+        the procedure's gate conditions to its earliest step, and rebuilding from
+        the catalogue alone would silently lose them. When the step was never
+        offered as evidence, the catalogue record is the source; a dependency is a
+        fact about the procedure, not about what retrieval happened to return.
+        """
+        block = evidence.block(step.citation)
+        conditions = block.conditions if block is not None else step.conditions
+        instruction = step.instruction
+        if language is Language.ARABIC and step.instruction_ar:
+            instruction = step.instruction_ar
+        return AnswerStep(
+            instruction=instruction,
+            procedure_id=step.procedure_id,
+            procedure_version=step.procedure_version,
+            step_id=step.citation,
+            source_section=step.source_section,
+            control_name=step.control_name,
+            screenshot_id=step.screenshot_id,
+            screenshot_url=self._screenshot_url(step.screenshot_id),
+            conditions=conditions,
+            source=StepSource.PREREQUISITE,
+            requires=step.requires,
+            step_order=step.step_order,
+        )
 
     def _screenshot_url(self, screenshot_id: str | None) -> str | None:
         if not screenshot_id or not self._screenshot_prefix:
@@ -556,6 +723,7 @@ class AnswerService:
             model_called=stamped.model_called,
             steps=[step.step_id for step in stamped.steps],
             dropped=list(stamped.dropped_citations),
+            inserted_prerequisites=list(stamped.inserted_prerequisites),
             conflicts=len(stamped.conflicts),
             clarifications=len(stamped.clarifying_questions),
             timings_ms=dict(timings),
@@ -610,4 +778,5 @@ __all__ = [
     "AnswerService",
     "AnswerStatus",
     "AnswerStep",
+    "StepSource",
 ]

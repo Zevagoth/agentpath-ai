@@ -314,6 +314,54 @@ def test_schema_rejects_duplicate_step_ids() -> None:
         Procedure.model_validate(payload)
 
 
+def test_a_step_may_declare_the_steps_it_depends_on() -> None:
+    """``requires`` makes step order a checkable property of the corpus."""
+    payload = _minimal_procedure_payload()
+    payload["steps"][1]["requires"] = ["S01"]
+    procedure = Procedure.model_validate(payload)
+    assert procedure.steps[1].requires == ("S01",)
+    assert procedure.steps[0].requires == ()
+
+
+def test_schema_rejects_a_dependency_on_a_step_that_does_not_exist() -> None:
+    """An unresolvable dependency would silently never be satisfied."""
+    payload = _minimal_procedure_payload()
+    payload["steps"][1]["requires"] = ["S09"]
+    with pytest.raises(ValidationError, match="unknown step"):
+        Procedure.model_validate(payload)
+
+
+def test_schema_rejects_a_dependency_on_a_later_step() -> None:
+    """A forward dependency is a cycle in something performed in order."""
+    payload = _minimal_procedure_payload()
+    payload["steps"][0]["requires"] = ["S02"]
+    with pytest.raises(ValidationError, match="earlier step"):
+        Procedure.model_validate(payload)
+
+
+def test_schema_rejects_a_step_that_depends_on_itself() -> None:
+    payload = _minimal_procedure_payload()
+    payload["steps"][1]["requires"] = ["S02"]
+    with pytest.raises(ValidationError, match="earlier step"):
+        Procedure.model_validate(payload)
+
+
+def test_the_relocation_procedure_declares_the_dependency_that_was_being_skipped() -> None:
+    """Guards the corpus half of the step-order fix.
+
+    A generated answer repeatedly cited step 6, "present the shortlisted option",
+    without step 5, which produces the shortlist. The dependency is declared in
+    the procedure so the answer layer can enforce it; if this declaration is ever
+    removed, that answer becomes representable again.
+    """
+    procedure = load_procedure_file(procedures_dir() / "NW-HTL-014.yaml")
+    by_id = {step.step_id: step for step in procedure.steps}
+    assert by_id["S06"].requires == ("S05",)
+    # Sparse on purpose: an early step an agent can do independently declares none.
+    assert by_id["S01"].requires == ()
+    assert by_id["S05"].requires == ()
+
+
 def test_qualified_step_id_names_the_procedure() -> None:
     """'S01' alone is ambiguous: every procedure has one."""
     assert qualified_step_id("NW-HTL-014", "S01") == "NW-HTL-014#S01"

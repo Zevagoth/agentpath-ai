@@ -45,6 +45,7 @@ from agentpath.generation import (
     AnswerStatus,
     ChatCompletion,
     OllamaUnavailable,
+    StepSource,
     StructuredCompletion,
     StructuredOutputError,
 )
@@ -62,6 +63,21 @@ ARABIC_QUESTION = "كيف أنقل الضيف لمكان إقامة بديل و�
 #: The chunk whose step-id line the chunker cut away; see
 #: ``tests/test_evidence_assembly.py``.
 TRUNCATED_CHUNK_ID = "dc54a84ef5855ea9"
+
+
+def _model_steps(result: Any) -> list[Any]:
+    """Only the steps the model itself chose.
+
+    Most tests here are about what the model produced and what the server attached
+    to it. The service also inserts any step a cited step declares it depends on,
+    which is correct but is not what those tests are measuring, so they filter to
+    the model's own contribution. The insertion behaviour has its own tests below.
+    """
+    return [step for step in result.steps if step.source is StepSource.MODEL]
+
+
+def _step_ids(steps: Any) -> list[str]:
+    return [step.step_id for step in steps]
 
 
 @pytest.fixture(scope="module")
@@ -328,7 +344,7 @@ async def test_a_supported_query_answers_with_validated_citations(
 
     assert result.status is AnswerStatus.ANSWERED
     assert result.model_called is True
-    assert [step.step_id for step in result.steps] == ["NW-HTL-014#S06", "NW-HTL-014#S07"]
+    assert _step_ids(_model_steps(result)) == ["NW-HTL-014#S06", "NW-HTL-014#S07"]
     assert result.dropped_citations == ()
     assert result.customer_wording
 
@@ -345,7 +361,7 @@ async def test_the_server_attaches_everything_the_model_was_not_allowed_to_write
     )
 
     result = await service.answer(WALKED_GUEST_QUESTION)
-    (step,) = result.steps
+    (step,) = _model_steps(result)
 
     assert step.instruction == "Do what NW-HTL-014#S07 says."  # the model's wording, unchanged
     assert step.procedure_id == "NW-HTL-014"
@@ -371,7 +387,7 @@ async def test_a_screenshot_bearing_step_carries_a_server_issued_url(
     )
 
     result = await service.answer("how do I log the supplier call")
-    (step,) = result.steps
+    (step,) = _model_steps(result)
 
     assert step.screenshot_id == "agentdesk-supplier-log"
     assert step.screenshot_url == "/api/screenshots/agentdesk-supplier-log"
@@ -386,9 +402,10 @@ async def test_a_step_with_no_screenshot_has_no_url(catalogue: ProcedureCatalogu
     )
 
     result = await service.answer(WALKED_GUEST_QUESTION)
+    (step,) = _model_steps(result)
 
-    assert result.steps[0].screenshot_id is None
-    assert result.steps[0].screenshot_url is None
+    assert step.screenshot_id is None
+    assert step.screenshot_url is None
 
 
 async def test_the_step_that_t7_could_not_cite_is_now_citable(
@@ -479,7 +496,7 @@ async def test_a_citation_the_evidence_does_not_support_is_dropped(
 
     result = await service.answer(WALKED_GUEST_QUESTION)
 
-    assert [step.step_id for step in result.steps] == ["NW-HTL-014#S07"]
+    assert _step_ids(_model_steps(result)) == ["NW-HTL-014#S07"]
     assert result.dropped_citations == ("NW-HTL-014#S10",)
     assert result.status is AnswerStatus.ANSWERED
 
@@ -529,8 +546,180 @@ async def test_an_instruction_with_a_valid_citation_but_no_text_is_dropped(
 
     result = await service.answer(WALKED_GUEST_QUESTION)
 
-    assert [step.step_id for step in result.steps] == ["NW-HTL-014#S08"]
+    assert _step_ids(_model_steps(result)) == ["NW-HTL-014#S08"]
     assert result.dropped_citations == ("NW-HTL-014#S07",)
+
+    # S08 declares it requires S07, so the step the model failed to write returns
+    # as a prerequisite - carrying the corpus's sentence rather than the blank one.
+    (recovered,) = [step for step in result.steps if step.step_id == "NW-HTL-014#S07"]
+    assert recovered.source is StepSource.PREREQUISITE
+    assert recovered.instruction.startswith("Issue the alternative with Rebook and Link")
+
+
+# --------------------------------------------------------------------------- #
+# Step order and step dependencies are enforced by the server
+# --------------------------------------------------------------------------- #
+#
+# The measured failure this section exists for: the model answered a relocation
+# question by citing S06 - "present the shortlisted option" - and omitting S05,
+# the step that produces the shortlist. It was deterministic across repetitions
+# and S05 was in the evidence throughout, so it was a selection defect, not a
+# missing-information one. The corpus declares the dependency and the service
+# satisfies it; no prompt wording is involved.
+
+
+async def test_the_corpus_declares_the_dependency_the_model_kept_missing(catalogue: ProcedureCatalogue) -> None:
+    """S06 requires S05, in the procedure source rather than in a prompt."""
+    record = catalogue.procedure("NW-HTL-014")
+    assert record is not None
+    assert record.steps["S06"].requires == ("S05",)
+
+
+async def test_a_cited_step_cannot_be_shown_without_the_step_it_requires(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """The exact failure, reproduced and then prevented."""
+    client = FakeOllama(reply=_reply("NW-HTL-014#S06"))
+    service = _service(
+        passages=(_passage(TRUNCATED_CHUNK_ID, real_chunks[TRUNCATED_CHUNK_ID], score=0.70),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+
+    assert _step_ids(result.steps) == ["NW-HTL-014#S05", "NW-HTL-014#S06"]
+    assert result.inserted_prerequisites == ("NW-HTL-014#S05",)
+
+    # The dependent step is kept, not dropped: satisfying the constraint by
+    # removing the answer would be worse than the defect.
+    assert _step_ids(_model_steps(result)) == ["NW-HTL-014#S06"]
+
+
+async def test_an_inserted_prerequisite_carries_the_corpus_wording_not_a_generated_one(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """The model never chose the step, so it has no wording for it."""
+    client = FakeOllama(reply=_reply("NW-HTL-014#S06"))
+    service = _service(
+        passages=(_passage(TRUNCATED_CHUNK_ID, real_chunks[TRUNCATED_CHUNK_ID], score=0.70),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+    (inserted,) = [step for step in result.steps if step.source is StepSource.PREREQUISITE]
+
+    record = catalogue.procedure("NW-HTL-014")
+    assert record is not None
+    assert inserted.instruction == record.steps["S05"].instruction
+    assert inserted.requires == ()
+    # Everything else is attached from the catalogue exactly as for a cited step.
+    assert inserted.control_name == "Find equivalent stays"
+    assert inserted.source_section == "NW-HTL-014.md > ## Steps > ### Step 5"
+
+
+async def test_dependencies_are_satisfied_transitively(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """S09 requires S07, which requires S06, which requires S05."""
+    client = FakeOllama(reply=_reply("NW-HTL-014#S09"))
+    service = _service(
+        passages=(_passage(TRUNCATED_CHUNK_ID, real_chunks[TRUNCATED_CHUNK_ID], score=0.70),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+
+    assert _step_ids(result.steps) == [
+        "NW-HTL-014#S05",
+        "NW-HTL-014#S06",
+        "NW-HTL-014#S07",
+        "NW-HTL-014#S09",
+    ]
+
+
+async def test_steps_are_presented_in_procedure_order_not_model_order(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """A prerequisite listed after its dependent satisfies the letter and not the purpose."""
+    client = FakeOllama(reply=_reply("NW-HTL-014#S08", "NW-HTL-014#S06", "NW-HTL-014#S07"))
+    service = _service(
+        passages=(_passage(TRUNCATED_CHUNK_ID, real_chunks[TRUNCATED_CHUNK_ID], score=0.70),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+
+    assert _step_ids(result.steps) == [
+        "NW-HTL-014#S05",
+        "NW-HTL-014#S06",
+        "NW-HTL-014#S07",
+        "NW-HTL-014#S08",
+    ]
+
+
+async def test_steps_with_no_declared_dependency_insert_nothing(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """The graph is declared where the procedure means it, not for every pair.
+
+    Steps 1-3 depend on nothing: verifying the booking, asking whether the guest
+    is present and calling the property are each independently doable. Declaring a
+    dependency for every consecutive pair would force the whole procedure into
+    every answer, which is the opposite failure to the one being fixed.
+    """
+    client = FakeOllama(reply=_reply("NW-HTL-014#S01", "NW-HTL-014#S02"))
+    service = _service(
+        passages=(_passage("9ef6da5a9c8a76b2", real_chunks["9ef6da5a9c8a76b2"], score=0.70),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+
+    assert _step_ids(result.steps) == ["NW-HTL-014#S01", "NW-HTL-014#S02"]
+    assert result.inserted_prerequisites == ()
+
+
+async def test_a_dependency_the_model_already_satisfied_inserts_nothing(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """Enforcement is idempotent: a complete answer is left alone."""
+    client = FakeOllama(reply=_reply("NW-HTL-014#S05", "NW-HTL-014#S06"))
+    service = _service(
+        passages=(_passage("cd4e99120e23083a", real_chunks["cd4e99120e23083a"], score=0.70),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+
+    assert _step_ids(result.steps) == ["NW-HTL-014#S05", "NW-HTL-014#S06"]
+    assert result.inserted_prerequisites == ()
+    assert all(step.source is StepSource.MODEL for step in result.steps)
+
+
+async def test_an_inserted_prerequisite_uses_arabic_for_an_arabic_answer(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """A language gate must not be failed on text the server inserted itself."""
+    client = FakeOllama(reply=_reply("NW-HTL-014#S06"))
+    service = _service(
+        passages=(_passage(TRUNCATED_CHUNK_ID, real_chunks[TRUNCATED_CHUNK_ID], score=0.70),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(ARABIC_QUESTION)
+    (inserted,) = [step for step in result.steps if step.source is StepSource.PREREQUISITE]
+
+    record = catalogue.procedure("NW-HTL-014")
+    assert record is not None
+    assert inserted.instruction == record.steps["S05"].instruction_ar
+    assert any("\u0600" <= character <= "\u06ff" for character in inserted.instruction)
 
 
 # --------------------------------------------------------------------------- #
@@ -612,7 +801,43 @@ async def test_partial_evidence_asks_a_focused_question_instead_of_guessing(
     assert len(result.clarifying_questions) == 1
 
     # The cited steps are still returned: they are valid, the case is not.
-    assert [step.step_id for step in result.steps] == ["NW-HTL-014#S07"]
+    assert _step_ids(_model_steps(result)) == ["NW-HTL-014#S07"]
+
+
+async def test_a_question_the_contract_would_reject_is_never_asked(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """The model may ask for a booking reference. The agent must not see it.
+
+    ``CaseContext`` rejects identifiers by design, so an agent who answered would
+    have nowhere to put the answer. The filter runs on the model's own wording,
+    not only on the questions built from the corpus.
+    """
+    client = FakeOllama(reply=_reply("NW-HTL-014#S07", clarifying_question="What is the guest's booking reference?"))
+    service = _service(
+        passages=(_passage(TRUNCATED_CHUNK_ID, real_chunks[TRUNCATED_CHUNK_ID], score=0.55),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+
+    assert result.status is AnswerStatus.CLARIFICATION_NEEDED
+    assert not any("booking reference" in question.lower() for question in result.clarifying_questions)
+    # A useful question still gets asked: the refused one is skipped, not the slot.
+    assert result.clarifying_questions
+
+
+async def test_no_procedure_can_ask_for_a_refused_field(catalogue: ProcedureCatalogue) -> None:
+    """Checked over the whole corpus, so a new procedure cannot reintroduce one."""
+    from agentpath.case_context import refused_reason
+    from agentpath.generation.evidence_assembly import _information_question
+
+    for record in catalogue:
+        for item in record.required_information:
+            if refused_reason(item) is not None:
+                continue
+            assert refused_reason(_information_question(item)) is None
 
 
 async def test_the_structured_question_is_used_when_the_model_offers_none(

@@ -64,6 +64,7 @@ from dataclasses import dataclass
 
 import structlog
 
+from agentpath.case_context import refused_reason
 from agentpath.domain import Passage, ProcedureHit, SearchResult
 from agentpath.procedures import (
     CITATION_TOKEN_PATTERN,
@@ -656,7 +657,14 @@ def clarifying_questions(evidence: AssembledEvidence, *, conflicts: Sequence[str
 
     for record in evidence.procedures:
         for item in record.required_information:
-            questions.append(_information_question(item))
+            # Requirements this system refuses to hold are also requirements it
+            # must not ask for: the case-context contract would reject the answer,
+            # so the question has no valid reply. See
+            # :data:`agentpath.case_context.NEVER_ASKED`. Filtered here rather than
+            # only at the edge so a refused item cannot occupy one of the capped
+            # slots and push out a question worth asking.
+            if refused_reason(item) is None:
+                questions.append(_information_question(item))
 
     # Capped, because the specification asks for *a focused* question and an agent
     # handed eleven of them at once is being interrogated rather than helped. The

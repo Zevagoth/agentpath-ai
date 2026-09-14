@@ -137,6 +137,15 @@ class Step(BaseModel):
         default="",
         description="Procedure-scoped stable id, e.g. 'S01'. Derived from number when omitted.",
     )
+    requires: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Steps that must be done before this one, as procedure-scoped ids, e.g. ['S05']. "
+            "Declared only where the procedure genuinely depends on an earlier step - a numbered "
+            "list is not a dependency graph, and claiming a dependency that is not real would "
+            "force irrelevant steps into an answer."
+        ),
+    )
     instruction: str = Field(min_length=10)
     instruction_ar: str | None = Field(default=None, min_length=5)
     screen: str | None = Field(default=None, description="AgentDesk screen name, e.g. 'Booking Detail'")
@@ -275,6 +284,29 @@ class Procedure(BaseModel):
             seen.add(step.step_id)
         if duplicates:
             raise ValueError(f"step_id must be unique within a procedure, repeated: {', '.join(duplicates)}")
+        return self
+
+    @model_validator(mode="after")
+    def _dependencies_are_earlier_steps(self) -> Procedure:
+        """A ``requires`` entry must name an earlier step of this procedure.
+
+        Two failures are worth catching at load time rather than at answer time. A
+        dependency on an unknown id would silently never be satisfied, so the
+        prerequisite it was meant to protect would go missing anyway. A dependency
+        on a *later* step is a cycle in something that is performed in order, and
+        the answer layer resolves these by walking the graph - a cycle there would
+        either loop or be quietly truncated.
+        """
+        order = {step.step_id: step.number for step in self.steps}
+        for step in self.steps:
+            for required in step.requires:
+                if required not in order:
+                    raise ValueError(f"step {step.step_id} requires unknown step {required}")
+                if order[required] >= step.number:
+                    raise ValueError(
+                        f"step {step.step_id} requires {required}, which is not an earlier step; "
+                        "dependencies must point backwards"
+                    )
         return self
 
     @model_validator(mode="after")

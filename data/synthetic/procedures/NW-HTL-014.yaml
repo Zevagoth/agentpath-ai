@@ -94,6 +94,9 @@ steps:
     ui_element: Call supplier
     expected_result: The refusal is confirmed by the property, not only reported by the guest.
   - number: 4
+    # "the details captured in step 3" - the log entry has nothing to record
+    # until the call has actually been made.
+    requires: [S03]
     instruction: >-
       Log the call in the Supplier Log with the outcome "Cannot accommodate" and
       paste the details captured in step 3.
@@ -118,6 +121,9 @@ steps:
     expected_result: At least one option marked Equivalent or Better is listed.
     screenshot: agentdesk-relocation-finder
   - number: 6
+    # The shortlist is produced by step 5. Presenting an option the agent was
+    # never told to search for is the exact incoherence this guards against.
+    requires: [S05]
     instruction: >-
       Present the shortlisted option to the guest and get their agreement before
       booking anything.
@@ -126,6 +132,8 @@ steps:
     screen: Relocation Finder
     expected_result: The guest has agreed to a specific alternative.
   - number: 7
+    # "get their agreement before booking anything" is step 6.
+    requires: [S06]
     instruction: >-
       Issue the alternative with Rebook and Link so the new booking stays attached
       to the original case. Do not cancel the original booking until the new
@@ -138,6 +146,8 @@ steps:
     ui_element: Rebook and Link
     expected_result: A linked alternative booking exists with its own confirmation number.
   - number: 8
+    # There is no cost difference to record until the alternative is issued.
+    requires: [S07]
     instruction: >-
       Record the verified cost difference in the Cost Recovery tab and attach the
       supplier evidence. The tab displays the pre-approved limit that applies to
@@ -149,6 +159,8 @@ steps:
     ui_element: Add verified cost
     expected_result: The recorded difference sits at or below the displayed pre-approved limit.
   - number: 9
+    # "confirmation of the new stay" - the new stay is created in step 7.
+    requires: [S07]
     instruction: >-
       Send the guest written confirmation of the new stay using template
       HTL-RELOC-01, including the new address and check-in details.
@@ -159,6 +171,8 @@ steps:
     ui_element: Send template
     expected_result: The guest has the new confirmation in writing.
   - number: 10
+    # The 30 minutes run "from the supplier log entry", which step 4 creates.
+    requires: [S04]
     instruction: >-
       If the guest is at the property and no alternative is confirmed within 30
       minutes of the supplier log entry, escalate without waiting for further

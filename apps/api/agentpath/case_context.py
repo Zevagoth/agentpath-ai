@@ -46,8 +46,23 @@ does not change the procedure.
 
 The consequence is honest and worth stating: some required information can never
 be filled from context. ``Booking reference`` is a required input of
-``NW-HTL-014`` and will always be reported as missing, because we chose not to
-accept it. That is the trade, not an oversight.
+``NW-HTL-014`` and this contract will never hold it.
+
+It follows that we must not *ask* for it either, and :data:`NEVER_ASKED` is that
+rule. Asking an agent for a booking reference is useless and undesirable at the
+same time: useless because they are reading the booking while they type, and
+undesirable because ``extra="forbid"`` means the only field they could put it in
+does not exist - so an agent who answered would be feeding an identifier to a
+system built to reject it. Those items are reported in
+:attr:`ContextUse.not_collected` with the reason, so the requirement is visibly
+declined rather than quietly missing, and they are removed from both the missing
+information and the clarifying questions.
+
+Where a requirement is genuinely operational, the answer is to add a
+non-sensitive field instead of asking for a sensitive one. ``Number of guests and
+rooms on the booking`` is required by ``NW-HTL-014`` - it decides which
+alternative accommodation qualifies - so :attr:`CaseContext.party_size` and
+:attr:`CaseContext.rooms_booked` carry it as counts. A count identifies nobody.
 
 Requirements for any future real integration
 --------------------------------------------
@@ -143,6 +158,23 @@ class CaseContext(BaseModel):
         default=None,
         description="Whether the customer is physically at the property or airport now.",
     )
+    party_size: int | None = Field(
+        default=None,
+        ge=1,
+        le=99,
+        description=(
+            "How many guests are on the booking. A count, not a manifest: it changes which "
+            "alternative accommodation qualifies, and it identifies nobody."
+        ),
+        examples=[2],
+    )
+    rooms_booked: int | None = Field(
+        default=None,
+        ge=1,
+        le=99,
+        description="How many rooms are on the booking. A count, for the same reason as party_size.",
+        examples=[1],
+    )
     actions_already_taken: tuple[str, ...] = Field(
         default=(),
         max_length=20,
@@ -214,17 +246,73 @@ def _is_set(value: object) -> bool:
 #: asked - so an item that is only loosely related stays unanswered and gets
 #: asked.
 #:
-#: Several items are answerable by no field at all. ``Booking reference`` is the
-#: clearest: it is required by the procedure and we deliberately do not accept it,
-#: so it is always reported missing. That is the cost of holding no identifiers.
+#: Items this contract refuses are handled separately, by :data:`NEVER_ASKED`:
+#: they are neither answered here nor asked, because asking for something we
+#: designed the model to reject is a question with no valid reply.
 ANSWERS: Mapping[str, tuple[str, ...]] = {
     "customer_arrived": ("physically at the property", "guest is at the property", "at the property now"),
     "booking_status": ("booking status", "status in agentdesk"),
-    "supplier_status": ("property contact who refused", "which system the property searched"),
     "service_date": ("nights of the stay are affected", "affected nights", "date of travel"),
-    "payment_status": ("payment", "refund destination", "refund stage"),
+    "payment_status": ("refund destination", "refund stage"),
     "error_code": ("error code", "rejection code"),
+    "party_size": ("number of guests",),
+    "rooms_booked": ("rooms on the booking", "number of rooms"),
 }
+# `supplier_status` deliberately claims nothing. It used to claim "Name and role of
+# the property contact who refused" and "Which system the property searched", and
+# both were over-claims: `cannot_accommodate` records *that* the supplier refused,
+# not *who* refused, and `no_record_of_booking` records that they found nothing,
+# not which system they looked in. Suppressing those questions meant an agent was
+# never prompted for evidence the procedure requires. The field is still given to
+# the model as branch data; it simply no longer answers a requirement.
+#
+# `payment_status` no longer claims the bare word "payment" either: it made
+# "Original payment method and last four digits" look answered by a status enum.
+
+#: Required information this system will not ask an agent for, and why.
+#:
+#: The reason is not that the information is unimportant - the procedure genuinely
+#: requires it - but that the question is useless and undesirable at the same time.
+#: Useless because the agent is reading the booking while they type, so they are
+#: not missing it. Undesirable because :class:`CaseContext` is built to reject
+#: exactly these values: an agent who answered would be typing an identifier into
+#: a system designed never to hold one, and the field they typed it into does not
+#: exist. Asking anyway trains agents to supply data the contract then refuses.
+#:
+#: Matched on substrings of the requirement or question text so both the corpus's
+#: wording and a model's own phrasing are caught. Reported in
+#: :attr:`ContextUse.not_collected` rather than dropped silently, so the policy
+#: stays visible to a reviewer.
+NEVER_ASKED: Mapping[str, tuple[str, ...]] = {
+    "an identifier the agent is already looking at, and that this contract does not accept": (
+        "booking reference",
+        "booking ref",
+        "confirmation number",
+    ),
+    "a customer name, which this contract does not accept": (
+        "guest name",
+        "customer name",
+        "name spelling",
+    ),
+    "payment card data, which this contract does not accept": (
+        "last four digits",
+        "card number",
+    ),
+}
+
+
+def refused_reason(text: str) -> str | None:
+    """Why *text* names something we will not ask for, or ``None``.
+
+    Takes a requirement or a whole question, because both are checked: the corpus
+    turns ``Booking reference`` into "What is the booking reference?", and a model
+    can ask for it in wording of its own.
+    """
+    lowered = text.lower()
+    for reason, phrases in NEVER_ASKED.items():
+        if any(phrase in lowered for phrase in phrases):
+            return reason
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +330,10 @@ class ContextUse:
     applied: Mapping[str, str] = field(default_factory=dict)
     #: Required information the context could not answer, so still worth asking.
     unanswered: tuple[str, ...] = ()
+    #: Required information this system will not ask for, mapped to why. Reported
+    #: rather than dropped: the procedure does require these, and a reviewer should
+    #: see a deliberate policy instead of a requirement that quietly disappeared.
+    not_collected: Mapping[str, str] = field(default_factory=dict)
     #: Steps the agent said they had already done, so the answer can acknowledge them.
     completed_steps: tuple[str, ...] = ()
     #: Product-line restriction derived from the context, if any.
@@ -252,19 +344,25 @@ class ContextUse:
         return bool(self.applied)
 
 
-def answers_requirement(context: CaseContext, requirement: str) -> str | None:
-    """The context field that answers *requirement*, or ``None``.
+def answers_requirement(context: CaseContext, requirement: str) -> tuple[str, ...]:
+    """The context fields that answer *requirement*, or ``()``.
 
     One place owns this mapping so the prompt, the clarifying question and the
     response's ``context_used`` cannot disagree about whether a fact is known.
+
+    A requirement is answered only when **every** field it names has been
+    supplied. "Number of guests and rooms on the booking" names two, and knowing
+    the guest count while the room count is missing does not answer it - it would
+    suppress the question while half the answer was still unknown. Returning the
+    whole set rather than the first match is what makes that checkable.
     """
     lowered = requirement.lower()
-    for name, phrases in ANSWERS.items():
-        if not _is_set(getattr(context, name, None)):
-            continue
-        if any(phrase in lowered for phrase in phrases):
-            return name
-    return None
+    claimed = tuple(name for name, phrases in ANSWERS.items() if any(phrase in lowered for phrase in phrases))
+    if not claimed:
+        return ()
+    if not all(_is_set(getattr(context, name, None)) for name in claimed):
+        return ()
+    return claimed
 
 
 def describe_use(
@@ -279,22 +377,37 @@ def describe_use(
     also carry an explicit ``product_line``, and the caller is the only place that
     knows which one won.
     """
+    # The refusal policy does not depend on what the caller supplied: an item we
+    # will not accept is not missing information for the agent to go and fetch,
+    # whether or not any context came with the request.
+    not_collected = {item: reason for item in requirements if (reason := refused_reason(item)) is not None}
+    askable = tuple(item for item in requirements if item not in not_collected)
+
     if context is None or context.is_empty:
-        return ContextUse(unanswered=tuple(requirements))
+        return ContextUse(unanswered=askable, not_collected=not_collected)
 
     applied: dict[str, str] = {}
     if product_line_applied:
         applied["product_type"] = f"restricted the search to the {product_line_applied} product line"
 
     unanswered: list[str] = []
-    for requirement in requirements:
-        name = answers_requirement(context, requirement)
-        if name is None:
+    for requirement in askable:
+        names = answers_requirement(context, requirement)
+        if not names:
             unanswered.append(requirement)
-        else:
+            continue
+        for name in names:
             applied.setdefault(name, f"already known, so it is not asked again: {requirement.lower()}")
 
-    for name in ("booking_status", "supplier_status", "customer_arrived", "payment_status", "error_code"):
+    for name in (
+        "booking_status",
+        "supplier_status",
+        "customer_arrived",
+        "payment_status",
+        "error_code",
+        "party_size",
+        "rooms_booked",
+    ):
         if _is_set(getattr(context, name)) and name not in applied:
             applied[name] = "given to the model as case data, so it can follow the matching branch"
 
@@ -307,6 +420,7 @@ def describe_use(
         provided=context.provided_fields,
         applied=applied,
         unanswered=tuple(unanswered),
+        not_collected=not_collected,
         completed_steps=context.completed_steps,
         product_line=product_line_applied,
     )
@@ -339,6 +453,10 @@ def render_for_prompt(context: CaseContext | None) -> str:
         lines.append(f"payment status: {context.payment_status.value.replace('_', ' ')}")
     if context.customer_arrived is not None:
         lines.append("customer is at the property now: " + ("yes" if context.customer_arrived else "no"))
+    if context.party_size is not None:
+        lines.append(f"guests on the booking: {context.party_size}")
+    if context.rooms_booked is not None:
+        lines.append(f"rooms on the booking: {context.rooms_booked}")
     if context.completed_steps:
         lines.append("steps the agent has already completed: " + ", ".join(context.completed_steps))
     if context.error_code:
@@ -351,6 +469,7 @@ def render_for_prompt(context: CaseContext | None) -> str:
 __all__ = [
     "ANSWERS",
     "CITATION_TOKEN",
+    "NEVER_ASKED",
     "BookingStatus",
     "CaseContext",
     "ContextUse",
@@ -358,5 +477,6 @@ __all__ = [
     "SupplierStatus",
     "answers_requirement",
     "describe_use",
+    "refused_reason",
     "render_for_prompt",
 ]

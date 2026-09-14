@@ -128,6 +128,12 @@ class StepRecord:
     #: Structured data only - see :meth:`ProcedureRecord.gate_conditions` for the
     #: procedure-level half.
     conditions: tuple[str, ...] = ()
+    #: Steps that must be performed before this one, as bare ids (``S05``). Read
+    #: from the YAML's ``requires``; the loader has already checked that each
+    #: target exists in the same procedure and comes earlier, so
+    #: :meth:`ProcedureRecord.dependency_closure` can walk these without
+    #: re-validating.
+    requires: tuple[str, ...] = ()
 
     @property
     def citation(self) -> str:
@@ -203,6 +209,41 @@ class ProcedureRecord:
     @property
     def citations(self) -> tuple[str, ...]:
         return tuple(step.citation for step in self.ordered_steps)
+
+    def dependency_closure(self, step_ids: Sequence[str]) -> tuple[StepRecord, ...]:
+        """*step_ids* plus every step they transitively require, in step order.
+
+        This is what makes step ordering a server guarantee rather than something
+        the prompt asks for politely. The measured failure was an answer that
+        cited ``S06`` - "present the shortlisted option" - without ``S05``, the
+        step that produces the shortlist. No wording change fixes that reliably,
+        because the model is choosing which steps to include and it had already
+        seen S05 in the evidence. Declaring the dependency in the corpus and
+        resolving it here means the incoherent answer is not representable.
+
+        Unknown ids are skipped rather than raising: the argument comes from a
+        model's citations, so an id this procedure does not have is an expected
+        input. ``visited`` also makes a cycle terminate - the loader rejects
+        forward references, but a walk over model-supplied input should not be
+        able to hang the request path.
+        """
+        visited: set[str] = set()
+        pending = [self._bare_step_id(step_id) for step_id in step_ids]
+        while pending:
+            step_id = pending.pop()
+            if step_id in visited:
+                continue
+            step = self.steps.get(step_id)
+            if step is None:
+                continue
+            visited.add(step_id)
+            pending.extend(required for required in step.requires if required not in visited)
+        return tuple(sorted((self.steps[step_id] for step_id in visited), key=lambda step: step.step_order))
+
+    def _bare_step_id(self, step_id: str) -> str:
+        """``NW-HTL-014#S06`` or ``S06`` alike, reduced to ``S06``."""
+        prefix = f"{self.procedure_id}{STEP_CITATION_SEPARATOR}"
+        return step_id[len(prefix) :] if step_id.startswith(prefix) else step_id
 
     def step(self, step_id: str) -> StepRecord | None:
         """Look up a step by its bare id (``S07``) or its citation token."""
@@ -405,6 +446,7 @@ def _load_one(path: Path) -> tuple[ProcedureRecord | None, list[str]]:
                 control_name=step.control_name,
                 screenshot_id=step.screenshot_id,
                 conditions=tuple(bound.get(step.step_order, ())),
+                requires=step.requires,
             )
             for step in steps
         },
@@ -461,9 +503,35 @@ def _load_steps(
                 screen_name=str(entry.get("screen") or "").strip() or None,
                 control_name=str(entry.get("ui_element") or "").strip() or None,
                 screenshot_id=str(entry.get("screenshot") or "").strip() or None,
+                requires=_strings(entry.get("requires")),
             )
         )
+    problems.extend(_dependency_problems(records, name=name))
     return records, problems
+
+
+def _dependency_problems(records: Sequence[StepRecord], *, name: str) -> list[str]:
+    """Check every ``requires`` target exists in this procedure and comes earlier.
+
+    Mirrors ``agentpath_ingestion.schema.Procedure._dependencies_are_earlier_steps``.
+    Checked twice on purpose: ingestion refuses to publish a corpus with a broken
+    graph, and this reader refuses to serve one, so the answer path never walks a
+    dependency it cannot resolve. A procedure that fails here is skipped and
+    reported, which degrades to "cannot answer from this procedure" rather than
+    to answers with prerequisites silently missing.
+    """
+    order = {record.step_id: record.step_order for record in records}
+    problems: list[str] = []
+    for record in records:
+        for required in record.requires:
+            if required not in order:
+                problems.append(f"procedure {name} step {record.step_id} requires unknown step {required!r}")
+            elif order[required] >= record.step_order:
+                problems.append(
+                    f"procedure {name} step {record.step_id} requires {required}, "
+                    "which is not an earlier step; dependencies must point backwards"
+                )
+    return problems
 
 
 def _branch_lines(raw: object) -> tuple[tuple[int | None, str], ...]:

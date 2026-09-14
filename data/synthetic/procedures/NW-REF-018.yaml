@@ -78,6 +78,9 @@ steps:
     ui_element: Refund destination
     expected_result: The refund destination is confirmed and stated to the customer.
   - number: 3
+    # "the settlement window from step 1" - there is nothing to compare against
+    # until step 1 has established it.
+    requires: [S01]
     instruction: >-
       Compare today's date against the settlement window from step 1 and tell the
       customer plainly whether the window is still open or has passed.
