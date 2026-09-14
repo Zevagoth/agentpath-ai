@@ -75,9 +75,50 @@ Then open <http://127.0.0.1:3000> and try:
 | `الفندق ما عنده غرف والضيف واصل` | NW-HTL-014 first, field flips to RTL |
 | `overboking at the hotle` | corrected to overbooking/hotel, NW-HTL-014 first |
 | `how do I reset my email password` | explicit abstention, no procedure |
+| `NW-HTL-014` | that procedure exactly — an id is a lookup, not a search term |
 
 Everything binds to `127.0.0.1`. Ports: web 3000, API 8000, RAGFlow UI 8081,
 RAGFlow API 9380, embedder 7998, reranker 7997.
+
+## The two endpoints
+
+`POST /api/search` finds procedures. It never loads a model, so it stays fast.
+
+`POST /api/answer` writes a grounded answer over the same retrieval. The console
+does not use it yet; drive it directly:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/answer \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "the hotel says no room and my guest is at reception"}' \
+  | python3 -m json.tool
+```
+
+It returns the summary, the ordered steps — each with its citation, the
+authoritative control name, its source section and its screenshot URL — plus the
+sources, the screenshots, per-stage timings, and at most one clarifying question.
+
+`status` is the field to branch on, and the failure modes are deliberately
+distinct: `abstained` means the knowledge base has no answer, `generation_failed`
+means the evidence was there and the model server was not, `empty_query` means
+nothing was asked. `model_called` is `false` on every abstention — the evidence
+gate runs before the model, so an unanswerable question costs no generation.
+
+Optionally pass `case_context` with non-sensitive facts the agent already has. It
+narrows the search, helps pick the right branch, and stops the system asking about
+something already answered. It never overrides the procedure. Personal and
+financial fields are **rejected** rather than ignored:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/answer \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "the hotel says no room",
+       "case_context": {"product_type": "hotels", "booking_status": "confirmed",
+                        "supplier_status": "cannot_accommodate", "customer_arrived": true}}'
+```
+
+`context_used` in the response shows exactly what each field did and what
+information is still missing.
 
 ## Testing
 
