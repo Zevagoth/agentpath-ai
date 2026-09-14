@@ -134,14 +134,14 @@ class Settings(BaseSettings):
     procedures_dir: Path = Field(default_factory=procedures_directory, validation_alias="AGENTPATH_PROCEDURES_DIR")
     # Ceiling on how many whole steps one generation may be given.
     #
-    # Was 12 on the assumption that the binding cost was prompt evaluation. It is
-    # not. Measured with `make model-check` at 12: prompt evaluation a few hundred
-    # milliseconds, decoding ~10.5 s, p95 14.7 s against a 10 s target - because
-    # given twelve steps the model answered by reciting all of them. The cap that
-    # matters is on how much the model is invited to say, so this also bounds the
-    # answer's step count via the schema's maxItems.
+    # Deliberately generous. The latency lever is the *answer* length, not the
+    # evidence length - measured at a 14.7 s p95, prompt evaluation was a few
+    # hundred milliseconds against ~10.5 s of decoding. Cutting this to 6 did
+    # reduce latency and also lost the two steps that answered the question,
+    # because step ranking comes from chunk scores and a chunk's steps all share
+    # one score. See MAX_ANSWER_STEPS in agentpath.generation.evidence_assembly.
     answer_max_evidence_blocks: int = Field(
-        default=6, ge=1, le=40, validation_alias="AGENTPATH_ANSWER_MAX_EVIDENCE_BLOCKS"
+        default=12, ge=1, le=40, validation_alias="AGENTPATH_ANSWER_MAX_EVIDENCE_BLOCKS"
     )
 
     # Evidence thresholds.

@@ -110,21 +110,45 @@ MIN_WORD_LENGTH = 3
 
 #: Ceiling on the evidence handed to one generation.
 #:
-#: Was 12, which fits ``num_ctx=8192`` comfortably - but fitting was the wrong
-#: test. Measured at 12: the model answered by reproducing the whole procedure,
-#: nine or ten steps per answer, and generation ran to a p95 of 14.7 s against a
-#: 10 s target. Output length, not prompt length, was the cost: prompt evaluation
-#: was a few hundred milliseconds while decoding was ~10.5 s.
+#: Twelve, and the history is worth keeping because the first attempt at the
+#: latency problem cut this to six and broke correctness.
 #:
-#: Six is chosen because an agent asking one question needs the steps that answer
-#: it, not a recitation of the procedure. Retrieval already ranks the steps, so the
-#: cut keeps the ones that matched. Raise it deliberately and re-measure with
-#: ``make model-check``; it is settings-backed for exactly that.
-MAX_EVIDENCE_BLOCKS = 6
+#: The measurement that mattered: at a p95 of 14.7 s, prompt evaluation was a few
+#: hundred milliseconds and decoding was ~10.5 s. The cost was how much the model
+#: *wrote*, not how much it read - it had been answering by reciting the whole
+#: procedure. Capping the evidence looked like the same lever and is not: it caps
+#: what the model can *see*.
+#:
+#: What that broke, caught by the necessary-steps check in
+#: ``scripts/measure_model_fitness.py``: asked in Arabic how to relocate a guest and
+#: record the new booking, the answer cited S01, S02, S03, S06, S09 and S10 - and
+#: lost S05 (find an equivalent stay) and S07 (Rebook and Link), which are the
+#: question. Step ranking is derived from chunk scores, and RAGFlow returns whole
+#: chunks, so every step inside one chunk shares a score; the cap then cannot tell
+#: which of them the query actually matched.
+#:
+#: So the evidence stays wide and :data:`MAX_ANSWER_STEPS` does the bounding. The
+#: model sees every relevant step and is limited only in how many it writes, which
+#: is the thing that was actually expensive.
+MAX_EVIDENCE_BLOCKS = 12
 
-#: Ceiling on how many steps one answer may contain, applied in the schema so the
-#: decoder cannot exceed it. Bounded by the evidence for the same reason.
-MAX_ANSWER_STEPS = 6
+#: Ceiling on how many steps one answer may contain.
+#:
+#: Ten, which is the length of the longest procedure in the corpus - so in practice
+#: this bounds nothing and the evidence does the bounding. That is deliberate, and
+#: it is the second correction to the same latency problem.
+#:
+#: Six seemed reasonable and was wrong. Forced to choose six steps out of ten, the
+#: model took the first six in procedure order, and the necessary-steps gate caught
+#: what that costs: asked how to handle the price difference, it cited S01 through
+#: S07 and never reached S08 - the Cost Recovery tab, which *is* the answer. A
+#: shorter answer that omits the step the question was about is not a saving.
+#:
+#: So length is bounded per instruction instead - see
+#: :data:`~agentpath.generation.prompt.MAX_INSTRUCTION_CHARS`. An agent scanning a
+#: step list needs the action, not the procedure's full paragraph, and trimming
+#: each line removes the same output tokens without removing a step.
+MAX_ANSWER_STEPS = 10
 
 #: Ceiling on clarifying questions. The specification asks for *a focused*
 #: question; the first implementation emitted every ``required_information`` entry

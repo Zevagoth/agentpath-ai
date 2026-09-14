@@ -604,25 +604,68 @@ async def test_partial_evidence_asks_a_focused_question_instead_of_guessing(
     assert result.clarifying_questions
     assert result.clarifying_questions[0] == "Is the guest at the property right now?"
 
-    # Plus questions built from structured fields, which cannot be invented, and
-    # bounded: the specification asks for *a focused* question, so the list stays
-    # short enough for an agent to act on. Asserted as a property rather than by
-    # naming one expected item, which would break every time the priority order
-    # legitimately changes.
-    from agentpath.generation.evidence_assembly import MAX_CLARIFYING_QUESTIONS
+    # Exactly one. An agent mid-call can act on one question; a list is a form to
+    # fill in, and the specification asks for *a focused* question.
+    from agentpath.generation.answer_service import MAX_QUESTIONS_SHOWN
 
-    assert len(result.clarifying_questions) <= MAX_CLARIFYING_QUESTIONS + 1
-    record = catalogue.procedure("NW-HTL-014")
-    assert record is not None
-    structured = {item.lower().rstrip("?.") for item in record.required_information}
-    for question in result.clarifying_questions[1:]:
-        lowered = question.lower()
-        assert any(item in lowered for item in structured) or lowered.startswith("does this apply:"), question
-        # The grammar bug this replaced: "what is the whether the guest is ...".
-        assert "what is the whether" not in lowered
+    assert MAX_QUESTIONS_SHOWN == 1
+    assert len(result.clarifying_questions) == 1
 
     # The cited steps are still returned: they are valid, the case is not.
     assert [step.step_id for step in result.steps] == ["NW-HTL-014#S07"]
+
+
+async def test_the_structured_question_is_used_when_the_model_offers_none(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """A silent model must not mean a silent clarification.
+
+    The fallback comes from the corpus, so it cannot smuggle in a requirement the
+    procedure does not state - and it is still exactly one.
+    """
+    client = FakeOllama(reply=_reply("NW-HTL-014#S07", clarifying_question=None))
+    service = _service(
+        passages=(_passage(TRUNCATED_CHUNK_ID, real_chunks[TRUNCATED_CHUNK_ID], score=0.55),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+
+    assert result.status is AnswerStatus.CLARIFICATION_NEEDED
+    assert len(result.clarifying_questions) == 1
+    question = result.clarifying_questions[0]
+
+    record = catalogue.procedure("NW-HTL-014")
+    assert record is not None
+    structured = {item.lower().rstrip("?.") for item in record.required_information}
+    lowered = question.lower()
+    assert any(item in lowered for item in structured) or lowered.startswith("does this apply:"), question
+    # The grammar bug this replaced: "what is the whether the guest is ...".
+    assert "what is the whether" not in lowered
+
+
+async def test_a_conflict_does_not_consume_the_question_slot(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """Conflicts are surfaced in their own field, with both versions named.
+
+    Spending the single question on "which of these two applies" would bury the
+    fact that the knowledge base contains an unresolved overlap, which is a corpus
+    problem for a human to fix rather than something to ask the agent to arbitrate.
+    """
+    client = FakeOllama(reply=_reply("NW-HTL-014#S07", clarifying_question="Is the guest at the property?"))
+    service = _service(
+        passages=(_passage(TRUNCATED_CHUNK_ID, real_chunks[TRUNCATED_CHUNK_ID], score=0.55),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+
+    assert len(result.clarifying_questions) == 1
+    for question in result.clarifying_questions:
+        assert "both cover" not in question
 
 
 async def test_strong_evidence_does_not_manufacture_a_clarification(

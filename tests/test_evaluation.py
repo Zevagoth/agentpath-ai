@@ -23,7 +23,6 @@ from agentpath_eval.metrics import (
 )
 from agentpath_eval.queries import QuerySetError, load_queries, queries_path, split_by_support
 
-
 # --------------------------------------------------------------------------- #
 # Metric arithmetic
 # --------------------------------------------------------------------------- #
@@ -154,9 +153,7 @@ def test_by_type_reports_abstention_for_unsupported_groups() -> None:
     report = ModeReport(mode="test", description="")
     report.outcomes = [
         _outcome(supported=True, ranked=("A",), abstained=False, query_type="typo"),
-        _outcome(
-            supported=False, ranked=(), abstained=True, expected=(), query_type="unsupported"
-        ),
+        _outcome(supported=False, ranked=(), abstained=True, expected=(), query_type="unsupported"),
     ]
     breakdown = report.by_type()
     assert breakdown["typo"]["recall_at_3"] == 1.0

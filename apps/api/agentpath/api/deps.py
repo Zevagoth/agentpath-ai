@@ -35,6 +35,11 @@ class ServiceContext:
     client: RAGFlowClient
     retriever: Retriever
     search: SearchService
+    #: The grounded answer service, or ``None`` when generation is not configured.
+    #: Optional rather than required so a context built for search alone - the
+    #: evaluation harness, the ingestion CLI, most tests - carries no Ollama client
+    #: and cannot fail on one. ``POST /api/answer`` returns 503 when it is absent.
+    answers: AnswerService | None = None
     #: Defaulted so every existing constructor call - tests, the CLI, the
     #: evaluation harness - keeps working and simply serves no screenshots.
     screenshots: ScreenshotCatalogue = field(default_factory=ScreenshotCatalogue.empty)
@@ -196,6 +201,20 @@ def build_context(settings: Settings) -> ServiceContext:
     retriever = build_retriever(settings, client)
     search = SearchService(retriever=retriever, lexicon=lexicon, settings=settings)
 
+    # Constructing the Ollama client is cheap - an httpx client and a settings
+    # snapshot, no connection and no model load - so the answer service is built
+    # here rather than per request. Whether the daemon is up and the model pulled
+    # is a runtime question, answered by /health and by the 503 on /api/answer,
+    # not something to discover while building the object graph.
+    answers = AnswerService(
+        search=search,
+        catalogue=procedures,
+        client=build_ollama_client(settings),
+        settings=settings,
+        max_blocks=settings.answer_max_evidence_blocks,
+        screenshot_url_prefix=SCREENSHOT_URL_PREFIX,
+    )
+
     logger.info(
         "context.built",
         dataset=settings.ragflow_dataset_name,
@@ -214,6 +233,7 @@ def build_context(settings: Settings) -> ServiceContext:
         client=client,
         retriever=retriever,
         search=search,
+        answers=answers,
         screenshots=screenshots,
         procedures=procedures,
     )

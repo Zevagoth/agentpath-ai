@@ -341,3 +341,107 @@ authoritative source for a button name.
 - **`make help` omits `test-e2e`** because its grep lacks a digit class.
 - **Nine declared screenshots have no capture yet**, including both that
   `NW-HTL-021` needs for itself. Ingestion reports them rather than skipping them.
+
+## Latency, and two corrections that made it worse first
+
+The answer path went over its 10 s target and the first two fixes were aimed at the
+wrong thing. Recording the sequence because the wrong conclusion was reasonable
+each time.
+
+| attempt | evidence blocks | answer steps | instruction chars | necessary steps kept | p50 | p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| baseline | 12 | unbounded | unbounded | — | 10.7 s | 14.7 s |
+| cap evidence | 6 | 6 | unbounded | 9/15 | 8.2 s | 9.97 s |
+| restore evidence | 12 | 6 | unbounded | 6/12 | 8.8 s | 11.4 s |
+| cap prose | 12 | 10 | 200 | 9/12 | 8.0 s | 10.8 s |
+| tighten prose | 12 | 10 | 160 | 9/12 | 6.9 s | 11.2 s |
+
+**What the measurement actually said.** At the 14.7 s baseline, prompt evaluation
+was a few hundred milliseconds and decoding was ~10.5 s. The cost was how much the
+model *wrote*.
+
+**First wrong turn: capping the evidence.** It looks like the same lever and is
+not - it caps what the model can *see*. It did bring p95 under target, and the
+necessary-steps check caught the price: asked how to handle the price difference,
+the answer cited S01 through S07 and never reached S08, the Cost Recovery tab,
+which is the answer to that question. Step ranking is derived from chunk scores and
+RAGFlow returns whole chunks, so every step inside one chunk shares a score and the
+cap cannot tell which of them the query matched.
+
+**Second wrong turn: capping the step count.** Forced to choose six steps out of
+ten, the model took the first six in procedure order. Same failure, different
+cause.
+
+**What worked: bounding each instruction instead.** The corpus writes 200-260
+character sentences with the reasoning attached; an agent scanning a step list
+needs the action. Trimming each line removes the same output tokens without
+removing a step.
+
+**Third wrong turn, reverted: 160 characters.** It shaved the median to 6.9 s and
+broke Arabic - language correctness fell from 18/18 to 15/18, because Arabic needs
+more characters than the English source for the same sentence and the model started
+answering in English to fit. A budget that silently changes the answer's language is
+not an optimisation. 200 is the floor for a bilingual answer.
+
+## Gate status
+
+Ten of twelve criteria pass on the current configuration. The two that do not:
+
+- **Necessary steps 9/12.** One case, deterministic across three repetitions: asked
+  in Arabic how to relocate a guest and record the new booking, the answer cites
+  S01, S02, S03, S06, S07, S08, S09 and S10 and skips **S05** - open Relocation
+  Finder and search for equivalent stays. It is not a cap: the answer contains eight
+  steps and S05 was in the evidence. The model presents an option it was never told
+  to search for. A prompt rule against leaving gaps in the sequence did not fix it.
+- **Latency p95 10.8 s against a 10 s target**, with p50 at 8.0 s. Driven by the
+  slowest single case rather than by the median. The target was stated as
+  preferable; the real numbers are reported rather than tuned away, and the honest
+  lever left is a smaller model or a shorter answer, both of which cost something
+  measured above.
+
+Everything else holds: JSON compliance 100%, unsupported claims 0, nonexistent
+citations 0, attribution 100%, control labels 100%, language 18/18, injection not
+obeyed, abstention without an LLM call 3/3, peak VRAM 5967 of 8188 MiB.
+
+## One clarifying question, not five
+
+The specification asks for *a focused* question. The first implementation emitted
+every `required_information` entry and every decision branch - eleven for a single
+answer - and rendered "Whether ..." items as *"what is the whether the guest is
+physically at the property right now?"*.
+
+Now exactly one reaches the agent. The model's own question is preferred when it
+produced one, because it is the only candidate that saw this case; the structured
+list is the fallback, ordered so the fallback is the most decisive thing left to
+ask. Conflicts do not compete for the slot - they are surfaced in their own field
+with both versions named, and spending the question on "which of these two applies"
+would bury the fact that the corpus contains an unresolved overlap.
+
+## `case_context`, and what it is allowed to do
+
+Design only. Nothing connects to a booking system and every test value is
+fabricated.
+
+`extra="forbid"` is the privacy control, not a policy statement: `guest_name`,
+`booking_reference`, `phone`, `card_last_four` and free-text `notes` are rejected at
+the HTTP edge with a 422, so the value never exists to be logged, cached, put in a
+prompt or printed in a stack trace. The three status fields are closed enums because
+the corpus branches on those words and a typo would silently fail to match.
+
+Measured effect on the same question, with and without a fabricated hotel case:
+
+| | without | with |
+| --- | --- | --- |
+| product-line restriction | none | `hotels` |
+| clarifying question | *Is the guest currently physically at the property?* | *Does this apply: the property calls back to confirm a room is available after all?* |
+| required info still missing | 5 items | 2 items |
+
+The two that remain are `Booking reference` and `Number of guests and rooms` - the
+fields the contract deliberately does not accept. That is the trade made visible
+rather than quietly closed.
+
+A bug worth recording: `context_used` came back empty for a request that had
+supplied a full context, because the service's `_finish` rebuilt the result field by
+field and the new field was not in the list. It is a `dataclasses.replace` now. A
+constructor call that has to be edited whenever a field is added eventually will not
+be.

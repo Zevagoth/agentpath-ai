@@ -52,11 +52,12 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 import structlog
 
+from agentpath.case_context import CaseContext, ContextUse, answers_requirement, describe_use, render_for_prompt
 from agentpath.config import Settings
 from agentpath.domain import EvidenceLevel, Language, SearchResult
 from agentpath.evidence import ABSTENTION_MESSAGE
@@ -85,6 +86,26 @@ GENERATION_FAILED_MESSAGE = (
     "The procedure was found, but the local answer model did not respond, so no answer was generated. "
     "This is not the same as finding no procedure."
 )
+
+
+def _already_known(question: str, context: CaseContext | None) -> bool:
+    """Whether the supplied case context already answers *question*.
+
+    Matched through :func:`~agentpath.case_context.answers_requirement`, the same
+    function the response's ``context_used`` reports from, so what the agent is
+    asked and what they are told about their context cannot disagree.
+    """
+    if context is None or context.is_empty:
+        return False
+    return answers_requirement(context, question) is not None
+
+
+#: How many clarifying questions reach the agent. One, by product decision: an
+#: agent mid-call can act on one question, and answering it narrows the case so the
+#: next turn can ask the next one. The evidence layer still ranks several - see
+#: :func:`~agentpath.generation.evidence_assembly.clarifying_questions` - and this
+#: is the cut applied at the edge, so the ordering there decides *which* one.
+MAX_QUESTIONS_SHOWN = 1
 
 #: Shown when the model answered but nothing it cited survived validation.
 UNGROUNDED_MESSAGE = (
@@ -165,6 +186,10 @@ class AnswerResult:
     dropped_citations: tuple[str, ...] = ()
     timings_ms: Mapping[str, float] = field(default_factory=dict)
     retrieval_metadata: Mapping[str, object] = field(default_factory=dict)
+    #: What the supplied case context actually did, so its effect is visible rather
+    #: than inferred: which fields narrowed the search, which stopped a question
+    #: being asked, and which required information is still missing.
+    context_used: ContextUse = field(default_factory=ContextUse)
 
     @property
     def answered(self) -> bool:
@@ -208,13 +233,24 @@ class AnswerService:
         *,
         product_line: str | None = None,
         limit: int | None = None,
+        context: CaseContext | None = None,
     ) -> AnswerResult:
         """Run the whole sequence for one question.
 
         Every stage is timed separately, because "the answer took nine seconds"
         is not actionable and "prompt evaluation took seven of them" is.
+
+        ``context`` carries non-sensitive facts the agent already has - see
+        :mod:`agentpath.case_context`. It narrows and informs, and it never
+        overrides: it can restrict the search, tell the model which branch of the
+        procedure applies, and stop a question being asked about something the agent
+        already stated. It contributes no words to the evidence and cannot change
+        what a step says.
         """
         total_started = time.perf_counter()
+        # An explicit product line wins over the one implied by the case: the
+        # dropdown is a deliberate act, the context is ambient.
+        effective_product_line = product_line or (context.product_type if context else None)
         timings: dict[str, float] = {
             "query_processing": 0.0,
             "retrieval": 0.0,
@@ -224,7 +260,7 @@ class AnswerService:
             "total": 0.0,
         }
 
-        result = await self._search.search(query, product_line=product_line, limit=limit)
+        result = await self._search.search(query, product_line=effective_product_line, limit=limit)
         search_timings = dict(result.timings_ms)
         timings["query_processing"] = search_timings.get("understanding", 0.0)
         # Aggregation is part of "getting results out of the engine": it groups
@@ -298,7 +334,14 @@ class AnswerService:
             )
 
         prompt_started = time.perf_counter()
-        messages = build_prompt(question=result.query.original, language=result.query.language, evidence=evidence)
+        messages = build_prompt(
+            question=result.query.original,
+            # An explicit context language overrides detection: the agent knows the
+            # customer better than a script detector does.
+            language=(context.language if context and context.language else result.query.language),
+            evidence=evidence,
+            case_facts=render_for_prompt(context),
+        )
         schema = build_answer_schema(evidence.citations)
         timings["prompt_construction"] = round((time.perf_counter() - prompt_started) * 1000, 2)
 
@@ -368,9 +411,30 @@ class AnswerService:
         needs_clarification = result.evidence is EvidenceLevel.PARTIAL or bool(result.conflicts)
         questions: tuple[str, ...] = ()
         if needs_clarification:
+            # Exactly one question reaches the agent. Someone mid-call with a guest
+            # at the desk can act on one question; five is a form to fill in, and
+            # the specification asks for *a focused* question. Answering it narrows
+            # the case, and the next turn asks the next one.
+            #
+            # The model's question is preferred when it produced one, because it is
+            # the only candidate that saw *this* case: the structured questions are
+            # derived from the procedure and would be identical for every query
+            # against it. The structured list is the fallback, ordered so that the
+            # fallback is the most decisive thing left to ask - a fork that changes
+            # the path before a fact that is merely missing.
+            #
+            # Conflicts deliberately do not compete for the slot. They are already
+            # surfaced in their own field with both versions named, and spending the
+            # question on "which of these two applies" would bury the fact that the
+            # knowledge base contains an unresolved overlap.
             model_question = (draft.clarifying_question or "").strip()
-            structured_questions = clarifying_questions(evidence, conflicts=result.conflicts)
-            questions = tuple(dict.fromkeys(([model_question] if model_question else []) + list(structured_questions)))
+            candidates = [model_question] if model_question else []
+            candidates += list(clarifying_questions(evidence, conflicts=()))
+            # Drop anything the agent already told us. Asking whether the guest has
+            # arrived when `customer_arrived` was supplied is the exact waste the
+            # case-context contract exists to remove.
+            candidates = [q for q in candidates if not _already_known(q, context)]
+            questions = tuple(dict.fromkeys(candidates))[:MAX_QUESTIONS_SHOWN]
 
         return self._finish(
             AnswerResult(
@@ -390,6 +454,13 @@ class AnswerService:
                 model_called=True,
                 dropped_citations=dropped,
                 retrieval_metadata=metadata,
+                context_used=describe_use(
+                    context,
+                    requirements=_requirements(evidence),
+                    product_line_applied=(
+                        effective_product_line if context and context.product_type and not product_line else None
+                    ),
+                ),
             ),
             timings=timings,
             started=total_started,
@@ -471,26 +542,12 @@ class AnswerService:
         the search service.
         """
         timings["total"] = round((time.perf_counter() - started) * 1000, 2)
-        stamped = AnswerResult(
-            status=answer.status,
-            query=answer.query,
-            detected_language=answer.detected_language,
-            summary=answer.summary,
-            steps=answer.steps,
-            conditions=answer.conditions,
-            escalation=answer.escalation,
-            customer_wording=answer.customer_wording,
-            clarifying_questions=answer.clarifying_questions,
-            conflicts=answer.conflicts,
-            sources=answer.sources,
-            evidence_level=answer.evidence_level,
-            evidence_reason=answer.evidence_reason,
-            model_called=answer.model_called,
-            failure_detail=answer.failure_detail,
-            dropped_citations=answer.dropped_citations,
-            timings_ms=dict(timings),
-            retrieval_metadata=answer.retrieval_metadata,
-        )
+        # `replace` rather than a field-by-field rebuild. The rebuild silently
+        # dropped `context_used` when it was added - the field defaulted to empty
+        # and every response reported that no context had been supplied, while the
+        # context had in fact been applied. A constructor call that has to be
+        # edited whenever a field is added will eventually not be.
+        stamped = replace(answer, timings_ms=dict(timings))
         logger.info(
             "answer.completed",
             status=stamped.status.value,
@@ -527,6 +584,15 @@ def _conditions(evidence: AssembledEvidence) -> tuple[str, ...]:
     read them rather than a paraphrase.
     """
     return tuple(dict.fromkeys(condition for block in evidence.blocks for condition in block.conditions))
+
+
+def _requirements(evidence: AssembledEvidence) -> tuple[str, ...]:
+    """Information the procedures in this evidence say they need, deduplicated.
+
+    Taken from the corpus rather than from the question, so "what is still missing"
+    is a property of the procedure and not a guess about the conversation.
+    """
+    return tuple(dict.fromkeys(item for record in evidence.procedures for item in record.required_information))
 
 
 def _failure_detail(exc: OllamaError) -> str:

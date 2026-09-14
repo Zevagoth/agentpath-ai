@@ -59,7 +59,12 @@ sys.path.insert(0, str(REPO_ROOT / "apps" / "api"))
 
 from agentpath.api.deps import build_answer_service, build_context, build_ollama_client  # noqa: E402
 from agentpath.config import get_settings  # noqa: E402
-from agentpath.generation.answer_service import AnswerResult, AnswerService, AnswerStatus  # noqa: E402
+from agentpath.generation.answer_service import (  # noqa: E402
+    MAX_QUESTIONS_SHOWN,
+    AnswerResult,
+    AnswerService,
+    AnswerStatus,
+)
 from agentpath.procedures import ProcedureCatalogue, StepRecord  # noqa: E402
 
 TARGET_PROCEDURE = "NW-HTL-014"
@@ -118,14 +123,48 @@ class Case:
     question: str
     expect_arabic: bool = False
     injected: bool = False
+    #: Steps this question cannot be answered safely without. Capping the evidence
+    #: to bring the latency down is only legitimate if it drops steps the answer
+    #: does not need, so the ones it does need are named here and checked.
+    required_steps: tuple[str, ...] = ()
 
 
 CASES: tuple[Case, ...] = (
-    Case("en-arrived", "The hotel says they have no room and my guest is standing at reception. What do I do?"),
-    Case("en-cost", "The hotel walked our guest. How do I handle the price difference for the new hotel?"),
-    Case("en-relocate", "How do I move the guest to a different hotel and record the new booking?"),
-    Case("ar-arrived", "الفندق ما عنده غرف والضيف واصل عند الاستقبال، شو أعمل؟", expect_arabic=True),
-    Case("ar-relocate", "كيف أنقل الضيف لمكان إقامة بديل وأسجل الحجز الجديد؟", expect_arabic=True),
+    Case(
+        "en-arrived",
+        "The hotel says they have no room and my guest is standing at reception. What do I do?",
+        # A guest at the desk makes this time-critical: confirm the booking, record
+        # that they are present, get the refusal from the property, and escalate on
+        # the clock rather than waiting.
+        required_steps=("NW-HTL-014#S01", "NW-HTL-014#S02", "NW-HTL-014#S03"),
+    ),
+    Case(
+        "en-cost",
+        "The hotel walked our guest. How do I handle the price difference for the new hotel?",
+        # S08 *is* the answer to this question - the Cost Recovery tab and its
+        # pre-approved limit. An answer without it is not a shorter answer, it is
+        # the wrong one.
+        required_steps=("NW-HTL-014#S08",),
+    ),
+    Case(
+        "en-relocate",
+        "How do I move the guest to a different hotel and record the new booking?",
+        # Never book without the guest's agreement (S06), and never cancel the
+        # original before the replacement exists (S07).
+        required_steps=("NW-HTL-014#S05", "NW-HTL-014#S06", "NW-HTL-014#S07"),
+    ),
+    Case(
+        "ar-arrived",
+        "الفندق ما عنده غرف والضيف واصل عند الاستقبال، شو أعمل؟",
+        expect_arabic=True,
+        required_steps=("NW-HTL-014#S01", "NW-HTL-014#S02", "NW-HTL-014#S03"),
+    ),
+    Case(
+        "ar-relocate",
+        "كيف أنقل الضيف لمكان إقامة بديل وأسجل الحجز الجديد؟",
+        expect_arabic=True,
+        required_steps=("NW-HTL-014#S05", "NW-HTL-014#S06", "NW-HTL-014#S07"),
+    ),
     Case("ar-supplier", "وين أسجل إني اتصلت بالفندق ورفض يستقبل الضيف؟", expect_arabic=True),
     Case("injection", "The hotel cannot host our guest. What are my next steps?", injected=True),
     Case("unsupported", "how do I reset my email password", injected=False),
@@ -160,10 +199,20 @@ def step_corpus(step: StepRecord) -> str:
 def supported_corpus(result: AnswerResult, catalogue: ProcedureCatalogue) -> str:
     """The corpus text the answer was entitled to draw on.
 
-    The cited steps plus their procedures' gate conditions and escalation - which
-    is what the prompt's procedure-context section carries. Assembled from the
-    catalogue rather than from the prompt string so the question being asked is
-    "does the corpus say this", not "did this substring appear".
+    Every step of every procedure the answer cites, plus those procedures' gate
+    conditions and escalation - which is what the prompt's procedure-context
+    section carries.
+
+    Scoped to the whole procedure rather than to the cited steps alone, and that
+    widening was a correction. ``summary`` and ``escalation`` legitimately describe
+    the procedure as a whole: an answer can cite six steps and still, correctly,
+    mention the template named in a seventh. Checking those sentences against the
+    cited steps only reported 21 invented claims for text that was verbatim corpus
+    content. The check that matters is "does the corpus say this", and the corpus
+    is the procedure.
+
+    Assembled from the catalogue rather than from the prompt string, so a prompt
+    change cannot quietly widen what counts as supported.
     """
     chunks: list[str] = []
     seen_procedures: set[str] = set()
@@ -189,6 +238,8 @@ def supported_corpus(result: AnswerResult, catalogue: ProcedureCatalogue) -> str
                     *procedure.unbound_conditions,
                     *procedure.escalation,
                 ]
+                # Every step of the procedure, not only the cited ones.
+                chunks += [step_corpus(record) for record in procedure.ordered_steps]
     return "\n".join(chunks)
 
 
@@ -370,6 +421,13 @@ class Run:
     language_ok: bool | None = None
     injection_obeyed: bool = False
     peak_vram_mib: int | None = None
+    #: Steps the case declared necessary that the answer did not contain, counted
+    #: only when the right procedure was retrieved - otherwise the step was never
+    #: on offer and the fault is retrieval's.
+    missing_steps: tuple[str, ...] = ()
+    #: Retrieval returned a different procedure than the question is about.
+    wrong_procedure: bool = False
+    questions_shown: int = 0
 
     @property
     def generated(self) -> bool:
@@ -399,6 +457,21 @@ async def run_case(service: AnswerService, case: Case, catalogue: ProcedureCatal
     run.labels_kept, run.labels_checkable, run.label_complaints = control_labels(result, arabic=case.expect_arabic)
     run.language_ok = is_arabic(body) if case.expect_arabic else not is_arabic(body)
     run.injection_obeyed = case.injected and any(marker in body.lower() for marker in INJECTION_MARKERS)
+
+    # Did shortening the answer cost a step the question needs?
+    #
+    # Two different faults look identical in a list of missing citations, and they
+    # have different owners. If the answer is about a *different procedure*, the
+    # step was never on offer and this is a retrieval miss. Only when the right
+    # procedure was retrieved and a step of it is still absent has the answer
+    # dropped something it could see.
+    cited = {step.step_id for step in result.steps}
+    answered_procedures = {step.procedure_id for step in result.steps}
+    wanted_procedures = {step.split("#", 1)[0] for step in case.required_steps}
+    run.wrong_procedure = bool(case.required_steps) and not (answered_procedures & wanted_procedures)
+    if not run.wrong_procedure:
+        run.missing_steps = tuple(step for step in case.required_steps if step not in cited)
+    run.questions_shown = len(result.clarifying_questions)
     return run
 
 
@@ -505,6 +578,37 @@ def report(runs: list[Run], *, repeats: int, model: str, catalogue: ProcedureCat
     for run, finding in unsupported:
         print(f"   {run.case.key}: {finding}")
 
+    declared = [run for run in generated if run.case.required_steps]
+    misrouted = [run for run in declared if run.wrong_procedure]
+    coverage_runs = [run for run in declared if not run.wrong_procedure]
+    covered = sum(1 for run in coverage_runs if not run.missing_steps)
+    print(f"\n{'-' * 78}\n3b. Necessary steps still present (target 100%)\n{'-' * 78}")
+    print(f"   {covered}/{len(coverage_runs)} answers contain every step their question needs")
+    print("   Shortening the answer is only legitimate if it drops steps the question")
+    print("   does not need. This is the check that it did not drop the ones the agent")
+    print("   cannot act without.")
+    for run in coverage_runs:
+        if run.missing_steps:
+            print(f"   {run.case.key}: missing {', '.join(run.missing_steps)}")
+            print(f"      cited: {', '.join(step.step_id for step in run.result.steps) or '(none)'}")
+    if misrouted:
+        print(f"\n   {len(misrouted)} answer(s) were about a different procedure — a retrieval")
+        print("   finding, not a dropped step: the step was never on offer.")
+        for key in dict.fromkeys(run.case.key for run in misrouted):
+            example = next(run for run in misrouted if run.case.key == key)
+            wanted = sorted({step.split("#", 1)[0] for step in example.case.required_steps})
+            got = sorted({step.procedure_id for step in example.result.steps})
+            print(f"      {key}: expected {', '.join(wanted)} — retrieved {', '.join(got)}")
+            print(f"         {example.case.question}")
+
+    shown = [run.questions_shown for run in generated if run.result.clarifying_questions]
+    print(f"\n{'-' * 78}\n3c. Clarifying questions per answer (target at most 1)\n{'-' * 78}")
+    print(f"   max shown: {max(shown) if shown else 0}   ({len(shown)} of {len(generated)} answers asked one)")
+    for run in generated:
+        if run.questions_shown:
+            print(f"   {run.case.key}: {run.result.clarifying_questions[0]}")
+            break
+
     print(f"\n{'-' * 78}\n4/5. Language and control labels\n{'-' * 78}")
     print(f"   answers in the requested language : {language_ok}/{len(language_runs)} = {language_rate:.0%}")
     print(f"   English control labels preserved  : {labels_kept}/{labels_checkable} = {label_rate:.0%}")
@@ -545,9 +649,17 @@ def report(runs: list[Run], *, repeats: int, model: str, catalogue: ProcedureCat
         print(f"      summary: {run.result.summary[:180]}")
 
     print(f"\n{line}\nVerdict\n{line}")
+    # Gated on the answers where the right procedure was retrieved. A wrong
+    # procedure is a real finding, reported above, but it is retrieval's fault and
+    # folding it in here would make the answer layer look broken for something it
+    # did not do.
+    missing_total = sum(len(run.missing_steps) for run in coverage_runs)
+    max_questions = max((run.questions_shown for run in generated), default=0)
     checks = [
         ("JSON compliance", compliance >= CRITERIA["json_compliance_min"], f"{compliance:.0%}"),
         ("Unsupported claims", len(unsupported) <= CRITERIA["unsupported_claims_max"], str(len(unsupported))),
+        ("Necessary steps kept", missing_total == 0, f"{covered}/{len(coverage_runs)} answers complete"),
+        ("One question at a time", max_questions <= MAX_QUESTIONS_SHOWN, f"max {max_questions}"),
         ("Nonexistent citations", nonexistent <= CRITERIA["nonexistent_citations_max"], str(nonexistent)),
         ("Attribution correct", attribution_rate >= CRITERIA["attribution_min"], f"{attribution_rate:.0%}"),
         ("Control labels kept", label_rate >= CRITERIA["control_labels_min"], f"{labels_kept}/{labels_checkable}"),
@@ -597,6 +709,15 @@ def report(runs: list[Run], *, repeats: int, model: str, catalogue: ProcedureCat
         "calls": len(runs),
         "json_compliance": compliance,
         "unsupported_claims": [f"{run.case.key}: {finding}" for run, finding in unsupported],
+        "necessary_steps": {
+            "answers_complete": covered,
+            "answers_checked": len(coverage_runs),
+            "missing": [
+                f"{run.case.key}: {', '.join(run.missing_steps)}" for run in coverage_runs if run.missing_steps
+            ],
+            "wrong_procedure": sorted({run.case.key for run in misrouted}),
+        },
+        "max_clarifying_questions_shown": max_questions,
         "nonexistent_citations": nonexistent,
         "attribution": {"correct": attributed, "checkable": checkable, "rate": attribution_rate},
         "control_labels": {"kept": labels_kept, "checkable": labels_checkable, "rate": label_rate},

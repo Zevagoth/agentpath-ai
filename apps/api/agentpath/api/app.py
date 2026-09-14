@@ -27,6 +27,8 @@ from fastapi.responses import JSONResponse
 from agentpath import __version__
 from agentpath.api.deps import ServiceContext, build_context
 from agentpath.api.schemas import (
+    AnswerRequest,
+    AnswerResponse,
     DependencyStatus,
     HealthResponse,
     SearchRequest,
@@ -186,6 +188,43 @@ def create_app(settings: Settings | None = None, context: ServiceContext | None 
             limit=payload.limit,
         )
         return SearchResponse.from_result(result, ctx.screenshots)
+
+    @app.post(
+        "/api/answer",
+        response_model=AnswerResponse,
+        summary="Answer a customer-service case with cited procedure steps",
+    )
+    async def answer(request: Request, payload: AnswerRequest) -> AnswerResponse:
+        """Generate a grounded answer, or refuse in a way that says which refusal.
+
+        Always HTTP 200 when the service ran, because the interesting outcomes are
+        not transport failures: abstaining, needing a clarification and failing to
+        generate are all legitimate results with different meanings, and ``status``
+        distinguishes them. The only 503 here is "generation is not configured at
+        all", which is a deployment fact rather than a result.
+
+        `/api/search` is untouched by this route. An agent who only wants to find
+        the procedure keeps a fast search that never loads a model.
+        """
+        ctx: ServiceContext = request.app.state.context
+        if ctx.answers is None:
+            return JSONResponse(  # type: ignore[return-value]
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "error": "generation_unavailable",
+                    "message": (
+                        "Answer generation is not configured on this deployment. Search is "
+                        "unaffected: POST /api/search still works."
+                    ),
+                },
+            )
+        result = await ctx.answers.answer(
+            payload.query,
+            product_line=payload.product_line,
+            limit=payload.limit,
+            context=payload.case_context,
+        )
+        return AnswerResponse.from_result(result, ctx.screenshots)
 
     @app.get(
         SCREENSHOT_URL_PREFIX + "/{screenshot_id}",

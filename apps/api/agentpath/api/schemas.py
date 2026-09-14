@@ -20,8 +20,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agentpath.case_context import CaseContext
 from agentpath.domain import EvidenceLevel, Language, ProcedureHit, RetrievalMode, SearchResult
 from agentpath.evidence import ABSTENTION_MESSAGE
+from agentpath.generation.answer_service import AnswerResult, AnswerStatus
 from agentpath.screenshots import SCREENSHOT_MEDIA_TYPE, Screenshot, ScreenshotCatalogue
 
 
@@ -374,3 +376,199 @@ class HealthResponse(BaseModel):
     mode: RetrievalMode
     dataset: str
     dependencies: list[DependencyStatus]
+
+
+# --------------------------------------------------------------------------- #
+# POST /api/answer
+# --------------------------------------------------------------------------- #
+
+
+class AnswerRequest(BaseModel):
+    """A case, plus anything the agent already knows about it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(
+        min_length=1,
+        max_length=2000,
+        description="The case in the agent's own words, Arabic or English.",
+        examples=["the hotel says it has no room and the guest is at reception"],
+    )
+    product_line: Literal["hotels", "flights", "cancellations", "refunds", "escalations"] | None = Field(
+        default=None,
+        description="Optional filter. Takes precedence over case_context.product_type.",
+    )
+    limit: int = Field(default=3, ge=1, le=10, description="How many procedures to consider.")
+    case_context: CaseContext | None = Field(
+        default=None,
+        description=(
+            "Non-sensitive facts the agent already has, used to narrow the search, pick the "
+            "right branch and avoid re-asking. It never overrides the procedure. Personal and "
+            "financial fields are rejected by the schema rather than ignored."
+        ),
+    )
+
+
+class AnswerStepOut(BaseModel):
+    """One instruction, with everything needed to verify it.
+
+    ``instruction`` is the only field the model wrote. Every other field was
+    attached by the server from the procedure catalogue after the model chose a
+    step id, which is why none of them can be invented.
+    """
+
+    instruction: str
+    procedure_id: str
+    procedure_version: str
+    step_id: str
+    citation: str = Field(description="Human-readable, e.g. 'NW-HTL-014 v2.1 · NW-HTL-014#S01'.")
+    source_section: str = Field(description="Where in the source document this step lives.")
+    control_name: str | None = Field(
+        default=None, description="Authoritative name of the control to operate, from the procedure."
+    )
+    conditions: list[str] = Field(default_factory=list, description="Structured conditions that route into this step.")
+    screenshot: ScreenshotRef | None = Field(default=None, description="The screenshot for this step, when one exists.")
+
+
+class ContextUsed(BaseModel):
+    """What the supplied case context actually did.
+
+    Present so the effect is visible rather than inferred: an agent who supplied a
+    fact and was not asked about it should be able to see why, and a reviewer should
+    be able to confirm the context narrowed the search rather than changed the advice.
+    """
+
+    provided: list[str] = Field(default_factory=list, description="Fields the caller set.")
+    applied: dict[str, str] = Field(
+        default_factory=dict, description="Field name to what it did, in words an agent can read."
+    )
+    unanswered: list[str] = Field(
+        default_factory=list,
+        description="Information the procedure needs that the context could not supply.",
+    )
+    completed_steps: list[str] = Field(default_factory=list, description="Steps the agent said they had already done.")
+    product_line: str | None = Field(
+        default=None, description="Product-line restriction derived from the context, if any."
+    )
+
+
+class AnswerResponse(BaseModel):
+    """The full result of one answer attempt, whatever became of it.
+
+    ``status`` is the field to branch on. The three failure modes are deliberately
+    distinct: ``abstained`` means the knowledge base has no answer, ``generation_failed``
+    means the evidence was there and the model server was not, and ``empty_query``
+    means nothing was asked. An agent who cannot tell them apart learns to distrust
+    the first.
+    """
+
+    status: AnswerStatus
+    query: str
+    detected_language: Language
+    summary: str = Field(description="For a non-answer status, this is the message to show.")
+    steps: list[AnswerStepOut] = Field(default_factory=list)
+    conditions: list[str] = Field(default_factory=list, description="The corpus's own words on when this applies.")
+    escalation: str | None = None
+    customer_wording: str | None = Field(
+        default=None, description="Suggested wording for the customer. Carries no policy weight."
+    )
+    clarifying_questions: list[str] = Field(
+        default_factory=list,
+        description="At most one, and only when the evidence does not settle the case.",
+    )
+    conflicts: list[str] = Field(
+        default_factory=list,
+        description="Procedures that overlap, with versions. Surfaced, never resolved for you.",
+    )
+    sources: list[str] = Field(default_factory=list)
+    screenshots: list[ScreenshotRef] = Field(
+        default_factory=list,
+        description="Every distinct screenshot referenced by a step, in step order.",
+    )
+    evidence: Evidence
+    model_called: bool = Field(description="Whether the local model was consulted. False on every abstention.")
+    failure_detail: str | None = Field(
+        default=None, description="Operator-facing reason, set only when generation failed."
+    )
+    dropped_citations: list[str] = Field(
+        default_factory=list,
+        description="Citations the model returned that the evidence did not support. Should be empty.",
+    )
+    context_used: ContextUsed
+    timings_ms: dict[str, float]
+    retrieval_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_result(cls, result: AnswerResult, screenshots: ScreenshotCatalogue | None = None) -> AnswerResponse:
+        """Convert the service's frozen dataclass to the wire format.
+
+        The single conversion point, as ``SearchResponse.from_result`` is for
+        search. Screenshots are resolved here rather than in the service so the
+        service stays free of HTTP concerns: it carries a screenshot *id*, and the
+        URL is a fact about this API.
+        """
+        catalogue = screenshots if screenshots is not None else ScreenshotCatalogue.empty()
+
+        steps: list[AnswerStepOut] = []
+        gallery: list[ScreenshotRef] = []
+        seen: set[str] = set()
+        for step in result.steps:
+            record = catalogue.resolve(step.screenshot_id) if step.screenshot_id else None
+            # The same guard as on a search citation: a capture is watermarked with
+            # the procedure and step it was made for, so it belongs to that procedure
+            # and nowhere else.
+            reference = (
+                ScreenshotRef.from_screenshot(record)
+                if record is not None and record.procedure_id == step.procedure_id
+                else None
+            )
+            if reference is not None and reference.screenshot_id not in seen:
+                seen.add(reference.screenshot_id)
+                gallery.append(reference)
+            steps.append(
+                AnswerStepOut(
+                    instruction=step.instruction,
+                    procedure_id=step.procedure_id,
+                    procedure_version=step.procedure_version,
+                    step_id=step.step_id,
+                    citation=step.citation,
+                    source_section=step.source_section,
+                    control_name=step.control_name,
+                    conditions=list(step.conditions),
+                    screenshot=reference,
+                )
+            )
+
+        use = result.context_used
+        return cls(
+            status=result.status,
+            query=result.query,
+            detected_language=result.detected_language,
+            summary=result.summary,
+            steps=steps,
+            conditions=list(result.conditions),
+            escalation=result.escalation,
+            customer_wording=result.customer_wording,
+            clarifying_questions=list(result.clarifying_questions),
+            conflicts=list(result.conflicts),
+            sources=list(result.sources),
+            screenshots=gallery,
+            evidence=Evidence(
+                level=result.evidence_level,
+                reason=result.evidence_reason,
+                abstained=result.abstained,
+                message=ABSTENTION_MESSAGE if result.abstained else None,
+            ),
+            model_called=result.model_called,
+            failure_detail=result.failure_detail,
+            dropped_citations=list(result.dropped_citations),
+            context_used=ContextUsed(
+                provided=list(use.provided),
+                applied=dict(use.applied),
+                unanswered=list(use.unanswered),
+                completed_steps=list(use.completed_steps),
+                product_line=use.product_line,
+            ),
+            timings_ms=dict(result.timings_ms),
+            retrieval_metadata=dict(result.retrieval_metadata),
+        )
