@@ -34,11 +34,7 @@ def tracked_files() -> list[str]:
 
 def test_no_env_file_other_than_the_example_is_tracked() -> None:
     tracked = tracked_files()
-    env_files = [
-        path
-        for path in tracked
-        if Path(path).name.startswith(".env") and Path(path).name != ".env.example"
-    ]
+    env_files = [path for path in tracked if Path(path).name.startswith(".env") and Path(path).name != ".env.example"]
     assert env_files == [], f"secret-bearing env files are tracked: {env_files}"
 
 

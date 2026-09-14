@@ -40,10 +40,7 @@ async def main() -> int:
             print(f"API not reachable at {API}; start it with: make api", file=sys.stderr)
             return 1
 
-        print(
-            f"{'group':<13} {'score':>6} {'lex':>6} {'sem':>6} {'concepts':>9} "
-            f"{'evidence':<13} query"
-        )
+        print(f"{'group':<13} {'score':>6} {'lex':>6} {'sem':>6} {'concepts':>9} {'evidence':<13} query")
         print("-" * 104)
 
         for group, query, _answerable in CASES:

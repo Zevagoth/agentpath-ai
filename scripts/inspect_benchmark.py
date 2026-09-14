@@ -23,8 +23,10 @@ def main() -> int:
 
     meta = payload["metadata"]
     print(f"report   : {path.name}")
-    print(f"queries  : {meta['query_set_size']} ({meta['supported_queries']} supported, "
-          f"{meta['unsupported_queries']} unsupported)")
+    print(
+        f"queries  : {meta['query_set_size']} ({meta['supported_queries']} supported, "
+        f"{meta['unsupported_queries']} unsupported)"
+    )
     print(f"reranking: {'on' if meta['reranking_enabled'] else 'off'}")
     print(f"evidence : {meta['evidence_thresholds']}")
 
@@ -59,11 +61,7 @@ def main() -> int:
                     f"got={','.join(outcome['ranked']) or '-'}"
                 )
 
-        weak = [
-            o
-            for o in mode["outcomes"]
-            if o["supported"] and o["hit_at_3"] and not o["hit_at_1"]
-        ]
+        weak = [o for o in mode["outcomes"] if o["supported"] and o["hit_at_3"] and not o["hit_at_1"]]
         if weak:
             print("  right procedure found, but not first:")
             for outcome in weak:

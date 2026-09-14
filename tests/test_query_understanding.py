@@ -165,7 +165,7 @@ def test_lexicon_expands_abbreviations(lexicon, shorthand: str, expanded: str) -
 
 
 def test_multiword_abbreviation_wins_over_single_token(lexicon) -> None:
-    """"non ref" must become non-refundable, not "non refund"."""
+    """ "non ref" must become non-refundable, not "non refund"."""
     text, _ = lexicon.correct(normalize("non ref booking"))
     assert "non-refundable" in text
 
@@ -192,7 +192,7 @@ def test_lexicon_matches_concepts_in_both_languages(lexicon, query: str, expecte
 
 
 def test_single_token_concepts_do_not_match_inside_longer_words(lexicon) -> None:
-    """"ref" inside "reference" must not be read as "refund"."""
+    """ "ref" inside "reference" must not be read as "refund"."""
     matches = lexicon.match_concepts(normalize("check the reference number"))
     assert "delayed_refund" not in {match.concept_id for match in matches}
 

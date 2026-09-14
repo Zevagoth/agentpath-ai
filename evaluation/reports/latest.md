@@ -20,28 +20,28 @@
 | Vector similarity weight | 0.6 (term weight 0.4) |
 | Similarity threshold | 0.15 |
 | Evidence thresholds | strong ≥ 0.6, margin ≥ 0.05, partial ≥ 0.51 |
-| Generated | `2026-09-14T20:21:12+00:00` |
+| Generated | `2026-09-14T20:51:56+00:00` |
 | Host | Linux 7.2.4-3-cachyos, Python 3.12.13 |
 
 ## Modes compared
 
 - **`lexical_baseline`** - Keyword overlap over the procedure corpus. No embeddings, no synonyms, no typo correction. Benchmark reference only.
 - **`ragflow_hybrid`** - RAGFlow hybrid retrieval (BM25 + vector) on the raw query, without AgentPath query understanding.
-- **`agentpath_full`** - The full AgentPath path over HTTP: understanding, hybrid retrieval, grading.
+- **`agentpath_full_in_process`** - The full AgentPath path in process (query understanding, hybrid retrieval, grading), without the HTTP hop.
 
 ## Results
 
 | Mode | Recall@1 | Recall@3 | MRR | Abstention | False abstention | p50 | p95 | mean |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `lexical_baseline` | 85% | 92% | 0.885 | 50% | 8% | 0 ms | 0 ms | 0 ms |
-| `ragflow_hybrid` | 88% | 96% | 0.923 | 100% | 12% | 115 ms | 148 ms | 115 ms |
-| `agentpath_full` | 100% | 100% | 1.000 | 100% | 0% | 138 ms | 180 ms | 138 ms |
+| `ragflow_hybrid` | 88% | 96% | 0.923 | 100% | 12% | 114 ms | 147 ms | 113 ms |
+| `agentpath_full_in_process` | 100% | 100% | 1.000 | 100% | 0% | 146 ms | 202 ms | 146 ms |
 
 Recall, MRR and false abstention are over supported queries; abstention accuracy is over unsupported queries.
 
 ## By query type
 
-| Query type | n | `lexical_baseline` R@3 | `ragflow_hybrid` R@3 | `agentpath_full` R@3 |
+| Query type | n | `lexical_baseline` R@3 | `ragflow_hybrid` R@3 | `agentpath_full_in_process` R@3 |
 | --- | --- | --- | --- | --- |
 | abbreviation | 2 | 100% | 100% | 100% |
 | arabic | 6 | 100% | 100% | 100% |
@@ -70,7 +70,7 @@ Supported queries whose expected procedure was not in the top 3.
 | --- | --- | --- | --- | --- |
 | overboking at the hotle | typo | NW-HTL-014 | _nothing_ | yes |
 
-### `agentpath_full`
+### `agentpath_full_in_process`
 
 None.
 
@@ -78,7 +78,7 @@ None.
 
 These have no answer in the knowledge base. Abstaining is the correct behaviour; returning a procedure means inventing policy.
 
-| Query | `lexical_baseline` | `ragflow_hybrid` | `agentpath_full` |
+| Query | `lexical_baseline` | `ragflow_hybrid` | `agentpath_full_in_process` |
 | --- | --- | --- | --- |
 | how do I reset my email password | abstained | abstained | abstained |
 | what is the office wifi password | abstained | abstained | abstained |

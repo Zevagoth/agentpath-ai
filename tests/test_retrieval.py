@@ -175,9 +175,7 @@ async def test_dataset_lookup_treats_permission_code_as_a_miss() -> None:
 
 @respx.mock
 async def test_dataset_lookup_returns_none_when_absent() -> None:
-    respx.get(f"{BASE_URL}/api/v1/datasets").mock(
-        return_value=httpx.Response(200, json={"code": 0, "data": []})
-    )
+    respx.get(f"{BASE_URL}/api/v1/datasets").mock(return_value=httpx.Response(200, json={"code": 0, "data": []}))
     async with RAGFlowClient(BASE_URL, API_KEY) as client:
         assert await client.find_dataset_id("missing") is None
 
@@ -384,9 +382,7 @@ async def test_empty_result_is_not_an_error() -> None:
 async def test_empty_query_skips_the_engine_entirely() -> None:
     async with RAGFlowClient(BASE_URL, API_KEY) as client:
         retriever = _retriever(client)
-        prepared = PreparedQuery(
-            original="", normalized="", language=Language.UNKNOWN, search_text=""
-        )
+        prepared = PreparedQuery(original="", normalized="", language=Language.UNKNOWN, search_text="")
         result = await retriever.retrieve(prepared, limit=3)
     assert result.passages == ()
     assert result.diagnostics["reason"] == "empty query"
@@ -394,9 +390,7 @@ async def test_empty_query_skips_the_engine_entirely() -> None:
 
 @respx.mock
 async def test_missing_dataset_produces_an_actionable_error() -> None:
-    respx.get(f"{BASE_URL}/api/v1/datasets").mock(
-        return_value=httpx.Response(200, json={"code": 0, "data": []})
-    )
+    respx.get(f"{BASE_URL}/api/v1/datasets").mock(return_value=httpx.Response(200, json={"code": 0, "data": []}))
     async with RAGFlowClient(BASE_URL, API_KEY) as client:
         with pytest.raises(RetrievalError, match="make ingest"):
             await _retriever(client).retrieve(_prepared(), limit=3)

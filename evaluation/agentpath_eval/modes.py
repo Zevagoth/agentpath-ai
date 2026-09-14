@@ -108,10 +108,7 @@ class RAGFlowHybridMode:
     """
 
     name = "ragflow_hybrid"
-    description = (
-        "RAGFlow hybrid retrieval (BM25 + vector) on the raw query, without "
-        "AgentPath query understanding."
-    )
+    description = "RAGFlow hybrid retrieval (BM25 + vector) on the raw query, without AgentPath query understanding."
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -190,9 +187,7 @@ class AgentPathAPIMode:
         try:
             response = await self._client.get(f"{self._base_url}/health")
         except httpx.HTTPError as exc:
-            raise RuntimeError(
-                f"AgentPath API is not reachable at {self._base_url}. Start it with: make api"
-            ) from exc
+            raise RuntimeError(f"AgentPath API is not reachable at {self._base_url}. Start it with: make api") from exc
         if response.status_code not in (200, 503):
             raise RuntimeError(f"unexpected /health status {response.status_code} from {self._base_url}")
 
@@ -239,8 +234,7 @@ def in_process_full_mode(settings: Settings) -> RAGFlowHybridMode:
     class _InProcess(RAGFlowHybridMode):
         name = "agentpath_full_in_process"
         description = (
-            "The full AgentPath path in process (query understanding, hybrid "
-            "retrieval, grading), without the HTTP hop."
+            "The full AgentPath path in process (query understanding, hybrid retrieval, grading), without the HTTP hop."
         )
 
         def __init__(self, settings: Settings) -> None:

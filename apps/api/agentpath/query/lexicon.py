@@ -99,9 +99,7 @@ class Lexicon:
         matches: list[ConceptMatch] = []
         for concept in self.concepts:
             best: tuple[str, Language] | None = None
-            for surface, language in sorted(
-                concept.normalized_forms.items(), key=lambda kv: -len(kv[0])
-            ):
+            for surface, language in sorted(concept.normalized_forms.items(), key=lambda kv: -len(kv[0])):
                 if " " in surface or "-" in surface:
                     if any(surface in haystack for haystack in haystacks):
                         best = (surface, language)
@@ -163,9 +161,7 @@ class Lexicon:
                     tags.append(tag)
         return tuple(tags)
 
-    def classify_product_line(
-        self, normalized_text: str, matches: tuple[ConceptMatch, ...]
-    ) -> str | None:
+    def classify_product_line(self, normalized_text: str, matches: tuple[ConceptMatch, ...]) -> str | None:
         """Best-guess product line, or ``None`` when the signal is ambiguous.
 
         Concept matches count double: "duplicate booking" is a stronger signal
@@ -218,9 +214,7 @@ def load_lexicon(path: Path | None = None) -> Lexicon:
         raise LexiconError("lexicon must be a YAML mapping")
 
     typos = {normalize(key): normalize(value) for key, value in (raw.get("typos") or {}).items()}
-    abbreviations = {
-        normalize(key): normalize(value) for key, value in (raw.get("abbreviations") or {}).items()
-    }
+    abbreviations = {normalize(key): normalize(value) for key, value in (raw.get("abbreviations") or {}).items()}
 
     concepts: list[Concept] = []
     for entry in raw.get("concepts") or []:

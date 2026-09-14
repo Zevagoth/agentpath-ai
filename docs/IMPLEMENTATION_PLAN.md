@@ -18,7 +18,7 @@ and explicit abstention when the knowledge base has no answer.
 | Doc engine | Elasticsearch | BM25 term scoring beside kNN |
 | Embeddings | `BAAI/bge-m3` via a TEI container, CPU | Same model as planned; TEI instead of Ollama because ufw blocks bridge-to-host traffic, so the model service lives inside RAGFlow's network |
 | Reranking | `BAAI/bge-reranker-v2-m3` via a TEI container | Registered and code-live, **disabled** behind `AGENTPATH_ENABLE_RERANK`; see [TROUBLESHOOTING](TROUBLESHOOTING.md) |
-| Answer model | `qwen2.5:7b-instruct` via host Ollama | Stage 2; called from the API over loopback, so it needs no container networking |
+| Answer model | `qwen3.5:4b` via host Ollama | Called from the API over loopback, so it needs no container networking. 34/34 layers on the GPU; `qwen2.5:7b-instruct` was a placeholder default and was never used |
 | API | FastAPI, Python 3.12 via uv | |
 | Web | Next.js 15 + React 19, plain CSS | RTL/LTR per field |
 | Tests | Pytest, Vitest, Playwright | 614 backend, 2 integration, 20 web unit, 5 live UI, 5 browser specs |

@@ -72,8 +72,7 @@ def render_markdown(metadata: dict[str, Any], reports: list[ModeReport]) -> str:
 
     lines += [
         "",
-        "Recall, MRR and false abstention are over supported queries; abstention accuracy is over "
-        "unsupported queries.",
+        "Recall, MRR and false abstention are over supported queries; abstention accuracy is over unsupported queries.",
         "",
     ]
 

@@ -103,9 +103,7 @@ def main(argv: list[str] | None = None) -> int:
         payload = response.json()
         data = payload.get("data")
         datasets = data.get("data") if isinstance(data, dict) else data
-        dataset_id = next(
-            (str(d["id"]) for d in (datasets or []) if d.get("name") == dataset_name), None
-        )
+        dataset_id = next((str(d["id"]) for d in (datasets or []) if d.get("name") == dataset_name), None)
         if not dataset_id:
             print(f"dataset {dataset_name!r} not found; run: make ingest", file=sys.stderr)
             return 1
@@ -164,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         at1 = "-" if m.hit_at_1 is None else ("yes" if m.hit_at_1 else "NO")
         at3 = "-" if m.hit_at_3 is None else ("yes" if m.hit_at_3 else "NO")
         print(
-            f"{m.label:<12} {m.median_ms:>10.0f} {str(m.top_procedure or '-'):<12} "
+            f"{m.label:<12} {m.median_ms:>10.0f} {m.top_procedure or '-':<12} "
             f"{m.top_score:>6.3f}  {at1:<4} {at3:<4} {m.query[:44]}"
         )
 

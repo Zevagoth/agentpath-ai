@@ -32,9 +32,10 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 # --------------------------------------------------------------------------- #
 # Requirements. Keep these in one place so docs and gates cannot drift apart.
@@ -331,8 +332,7 @@ def collect_ollama() -> dict[str, Any]:
         return result
     result["reachable"] = True
     result["models"] = [
-        {"name": m.get("name"), "size_gb": round(m.get("size", 0) / (1024**3), 1)}
-        for m in payload.get("models", [])
+        {"name": m.get("name"), "size_gb": round(m.get("size", 0) / (1024**3), 1)} for m in payload.get("models", [])
     ]
     result["listen_addresses"] = ollama_listen_addresses()
     return result
@@ -454,8 +454,7 @@ def evaluate(report: Report) -> list[Check]:
     elif available_ram < MIN_AVAILABLE_RAM_GB:
         ram_status = "warn"
         ram_remedy = (
-            "Close memory-heavy applications before starting the stack; "
-            "Elasticsearch alone is configured for ~4 GB."
+            "Close memory-heavy applications before starting the stack; Elasticsearch alone is configured for ~4 GB."
         )
     else:
         ram_status = "pass"
@@ -519,7 +518,9 @@ def evaluate(report: Report) -> list[Check]:
             id="uv",
             status="pass" if report.tools.get("uv") else "fail",
             detail=report.tools.get("uv") or "uv not found",
-            remedy=None if report.tools.get("uv") else "Install uv: https://docs.astral.sh/uv/getting-started/installation/",
+            remedy=None
+            if report.tools.get("uv")
+            else "Install uv: https://docs.astral.sh/uv/getting-started/installation/",
         )
     )
     node_version = parse_version(report.tools.get("node"))
@@ -533,20 +534,12 @@ def evaluate(report: Report) -> list[Check]:
     )
 
     # Ports ----------------------------------------------------------------
-    conflicts = [
-        p
-        for p in report.ports
-        if p["required_free"] and p["busy"] and not p.get("held_by_agentpath")
-    ]
+    conflicts = [p for p in report.ports if p["required_free"] and p["busy"] and not p.get("held_by_agentpath")]
     ours = [p for p in report.ports if p.get("held_by_agentpath")]
     if conflicts:
         port_status: Status = "fail"
-        port_detail = "held by another process: " + ", ".join(
-            f"{p['port']} ({p['owner']})" for p in conflicts
-        )
-        port_remedy = (
-            "Stop the conflicting service, or remap the port in infra/ragflow/env.agentpath."
-        )
+        port_detail = "held by another process: " + ", ".join(f"{p['port']} ({p['owner']})" for p in conflicts)
+        port_remedy = "Stop the conflicting service, or remap the port in infra/ragflow/env.agentpath."
     elif ours:
         port_status = "pass"
         port_detail = f"{len(ours)} port(s) already published by the running AgentPath stack"
@@ -570,7 +563,9 @@ def evaluate(report: Report) -> list[Check]:
         ollama_remedy = "Bind Ollama to 127.0.0.1 only; containers reach it through the Docker bridge relay."
     else:
         ollama_status = "pass"
-        ollama_detail = f"reachable, bound to {', '.join(listen) or '127.0.0.1:11434'}, {len(report.ollama.get('models', []))} model(s) present"
+        bound_to = ", ".join(listen) or "127.0.0.1:11434"
+        model_count = len(report.ollama.get("models", []))
+        ollama_detail = f"reachable, bound to {bound_to}, {model_count} model(s) present"
         ollama_remedy = None
     checks.append(Check(id="ollama", status=ollama_status, detail=ollama_detail, remedy=ollama_remedy))
 
@@ -589,14 +584,12 @@ def evaluate(report: Report) -> list[Check]:
             Check(
                 id="gpu",
                 status="pass" if free_vram >= 2000 else "warn",
-                detail=(
-                    f"{report.gpu['name']}, {free_vram} MiB free of {report.gpu['memory_total_mib']} MiB"
-                ),
+                detail=(f"{report.gpu['name']}, {free_vram} MiB free of {report.gpu['memory_total_mib']} MiB"),
                 remedy=None
                 if free_vram >= 2000
                 else (
-                    "Low free VRAM: embeddings will fall back to CPU. Free VRAM before Stage 2 "
-                    "(qwen2.5:7b-instruct needs roughly 5.5 GB)."
+                    "Low free VRAM. Answer generation needs roughly 3.5 GB free "
+                    "(qwen3.5:4b, measured peak 6.0 GB of board usage including the desktop)."
                 ),
             )
         )
@@ -614,7 +607,9 @@ SYMBOLS = {"pass": "PASS", "warn": "WARN", "fail": "FAIL"}
 def render_table(report: Report) -> str:
     lines = ["", "AgentPath AI - environment check", "=" * 60]
     lines.append(f"generated: {report.generated_at}")
-    lines.append(f"os:        {report.os.get('distribution')} (kernel {report.os.get('kernel')}, {report.os.get('arch')})")
+    lines.append(
+        f"os:        {report.os.get('distribution')} (kernel {report.os.get('kernel')}, {report.os.get('arch')})"
+    )
     lines.append(f"cpu:       {report.cpu.get('model')} ({report.cpu.get('logical_cores')} threads)")
     lines.append(
         f"memory:    {report.memory.get('total_gb')} GB total / {report.memory.get('available_gb')} GB available"
@@ -674,8 +669,7 @@ def render_markdown(report: Report) -> str:
         "",
         f"- Generated: `{report.generated_at}`",
         f"- Platform: {report.os.get('platform')} ({report.os.get('arch')})",
-        f"- CPU threads: {report.cpu.get('logical_cores')} "
-        f"(requirement: 4 or more)",
+        f"- CPU threads: {report.cpu.get('logical_cores')} (requirement: 4 or more)",
         f"- Memory: {_capacity_band(report.memory.get('total_gb', 0.0))} total "
         f"(requirement: {MIN_TOTAL_RAM_GB:.0f} GB or more)",
         f"- Free disk: {_capacity_band(min((d['free_gb'] for d in report.disks), default=0.0))} "
@@ -712,9 +706,7 @@ def render_markdown(report: Report) -> str:
     }
     for name, value in report.tools.items():
         version = format_version(parse_version(value)) if value else None
-        rows.append(
-            f"| `{name}` | {version or '_not found_'} | {requirements.get(name, '-')} |"
-        )
+        rows.append(f"| `{name}` | {version or '_not found_'} | {requirements.get(name, '-')} |")
 
     rows += [
         "",
@@ -732,10 +724,7 @@ def render_markdown(report: Report) -> str:
             state = "busy"
         else:
             state = "free"
-        rows.append(
-            f"| {row['port']} | {state} | {row['owner']} | "
-            f"{'yes' if row['required_free'] else 'no'} |"
-        )
+        rows.append(f"| {row['port']} | {state} | {row['owner']} | {'yes' if row['required_free'] else 'no'} |")
 
     if report.ollama.get("reachable"):
         # Neither the model names nor the count are reported: what a developer keeps
@@ -788,7 +777,7 @@ def _capacity_band(value_gb: float) -> str:
 
 
 def build_report(workspace: str) -> Report:
-    report = Report(generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    report = Report(generated_at=datetime.now(UTC).isoformat(timespec="seconds"))
     report.os = collect_os()
     report.cpu = collect_cpu()
     report.memory = collect_memory()

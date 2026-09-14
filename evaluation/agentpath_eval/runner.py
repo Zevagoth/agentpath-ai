@@ -24,7 +24,7 @@ import asyncio
 import json
 import platform
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agentpath.config import Settings, get_settings
@@ -111,7 +111,7 @@ async def run_benchmark(args: argparse.Namespace) -> int:
             await mode.aclose()
 
     metadata = {
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "query_set_size": len(queries),
         "supported_queries": len(supported),
         "unsupported_queries": len(unsupported),
@@ -136,7 +136,7 @@ async def run_benchmark(args: argparse.Namespace) -> int:
 
     target = reports_dir()
     target.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
     json_path = target / f"benchmark-{stamp}.json"
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -160,8 +160,7 @@ def repeats_label(repeats: int) -> str:
 def print_console_summary(reports: list[ModeReport]) -> None:
     print()
     header = (
-        f"{'mode':<28} {'R@1':>6} {'R@3':>6} {'MRR':>6} "
-        f"{'abstain':>8} {'false':>7} {'p50':>7} {'p95':>7} {'mean':>7}"
+        f"{'mode':<28} {'R@1':>6} {'R@3':>6} {'MRR':>6} {'abstain':>8} {'false':>7} {'p50':>7} {'p95':>7} {'mean':>7}"
     )
     print(header)
     print("-" * len(header))

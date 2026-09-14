@@ -125,11 +125,7 @@ class LexicalBaseline:
         Scores are normalized by query length so they stay roughly comparable
         across queries; the ordering is unaffected.
         """
-        tokens = [
-            token
-            for token in tokenize(normalize(query))
-            if token not in STOPWORDS and len(token) >= 2
-        ]
+        tokens = [token for token in tokenize(normalize(query)) if token not in STOPWORDS and len(token) >= 2]
         if not tokens:
             return [], True
 
@@ -138,10 +134,7 @@ class LexicalBaseline:
             candidates = [doc for doc in candidates if doc.product_line == product_line]
 
         divisor = math.sqrt(len(tokens)) or 1.0
-        scored = [
-            (doc.procedure_id, doc.score(tokens) / divisor)
-            for doc in candidates
-        ]
+        scored = [(doc.procedure_id, doc.score(tokens) / divisor) for doc in candidates]
         scored = [(procedure_id, score) for procedure_id, score in scored if score > 0.0]
         scored.sort(key=lambda pair: (-pair[1], pair[0]))
 

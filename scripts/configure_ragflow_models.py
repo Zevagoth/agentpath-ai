@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import json
 import math
 import os
 import secrets
@@ -176,9 +175,7 @@ class RAGFlowAdmin:
         return headers
 
     def _call(self, method: str, path: str, **kwargs: Any) -> tuple[dict[str, Any], httpx.Response]:
-        response = self._client.request(
-            method, f"{self._base_url}{path}", headers=self._headers(), **kwargs
-        )
+        response = self._client.request(method, f"{self._base_url}{path}", headers=self._headers(), **kwargs)
         try:
             payload = response.json()
         except ValueError:
@@ -478,9 +475,7 @@ def provision(admin: RAGFlowAdmin, env: dict[str, str]) -> tuple[str, str]:
     # shorter "{model}@{provider}" form implies an instance literally named
     # "default", and RAGFlow refuses to create an instance with that name, so the
     # three-part form is the only one that resolves for a self-hosted provider.
-    embedding_id = (
-        f"{embedding_spec.model_name}@{embedding_spec.instance_name}@{embedding_spec.provider_name}"
-    )
+    embedding_id = f"{embedding_spec.model_name}@{embedding_spec.instance_name}@{embedding_spec.provider_name}"
     rerank_id = f"{rerank_spec.model_name}@{rerank_spec.instance_name}@{rerank_spec.provider_name}"
     admin.set_default_models(embedding_id=embedding_id, rerank_id=rerank_id)
     info(f"tenant defaults set: embedding={embedding_id}, rerank={rerank_id}")
@@ -506,12 +501,8 @@ def main(argv: list[str] | None = None) -> int:
                 fail("no operator credentials in .env.local; run without --verify-only first")
                 return 1
             admin.login(email, password)
-            embedding_id = env.get(
-                "RAGFLOW_EMBEDDING_MODEL", f"{EMBEDDING_MODEL}@agentpath-embedder@HuggingFace"
-            )
-            rerank_id = env.get(
-                "RAGFLOW_RERANK_MODEL", f"{RERANK_MODEL}@agentpath-reranker@HuggingFace"
-            )
+            embedding_id = env.get("RAGFLOW_EMBEDDING_MODEL", f"{EMBEDDING_MODEL}@agentpath-embedder@HuggingFace")
+            rerank_id = env.get("RAGFLOW_RERANK_MODEL", f"{RERANK_MODEL}@agentpath-reranker@HuggingFace")
         else:
             embedding_id, rerank_id = provision(admin, env)
 

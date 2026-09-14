@@ -45,9 +45,8 @@ def grade_evidence(
     margin = top.score - runner_up.score if runner_up else None
 
     if top.score >= strong_score and (margin is None or margin >= strong_margin):
-        detail = (
-            f"{top.procedure_id} scored {top.score:.2f}"
-            + (f", ahead of the next procedure by {margin:.2f}." if margin is not None else " and was the only match.")
+        detail = f"{top.procedure_id} scored {top.score:.2f}" + (
+            f", ahead of the next procedure by {margin:.2f}." if margin is not None else " and was the only match."
         )
         return EvidenceLevel.STRONG, detail
 

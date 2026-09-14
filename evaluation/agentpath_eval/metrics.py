@@ -220,9 +220,7 @@ class ModeReport:
             else:
                 summary[query_type] = {
                     "queries": len(group),
-                    "abstention_accuracy": round(
-                        sum(1 for o in group if o.correct_abstention) / len(group), 3
-                    ),
+                    "abstention_accuracy": round(sum(1 for o in group if o.correct_abstention) / len(group), 3),
                 }
         return summary
 

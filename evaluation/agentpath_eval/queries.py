@@ -69,13 +69,9 @@ def load_queries(path: Path | None = None) -> list[BenchmarkQuery]:
         expect_abstain = bool(entry.get("expect_abstain", False))
 
         if expected and expect_abstain:
-            raise QuerySetError(
-                f"{query_id}: a query cannot both expect procedures and expect abstention"
-            )
+            raise QuerySetError(f"{query_id}: a query cannot both expect procedures and expect abstention")
         if not expected and not expect_abstain:
-            raise QuerySetError(
-                f"{query_id}: a query with no expected procedures must set expect_abstain: true"
-            )
+            raise QuerySetError(f"{query_id}: a query with no expected procedures must set expect_abstain: true")
 
         queries.append(
             BenchmarkQuery(
