@@ -109,9 +109,7 @@ class FakeRetriever:
     def mode(self) -> RetrievalMode:
         return RetrievalMode.HYBRID
 
-    async def retrieve(
-        self, query: PreparedQuery, *, limit: int, product_line: str | None = None
-    ) -> RetrievedPassages:
+    async def retrieve(self, query: PreparedQuery, *, limit: int, product_line: str | None = None) -> RetrievedPassages:
         self.calls.append({"search_text": query.search_text, "limit": limit, "product_line": product_line})
         return RetrievedPassages(
             passages=self.passages,
@@ -534,9 +532,7 @@ async def test_the_caching_headers_let_a_browser_revalidate_cheaply() -> None:
     try:
         first = await client.get(f"{SCREENSHOT_URL_PREFIX}/agentdesk-supplier-log")
         etag = first.headers["etag"]
-        second = await client.get(
-            f"{SCREENSHOT_URL_PREFIX}/agentdesk-supplier-log", headers={"if-none-match": etag}
-        )
+        second = await client.get(f"{SCREENSHOT_URL_PREFIX}/agentdesk-supplier-log", headers={"if-none-match": etag})
         weak = await client.get(
             f"{SCREENSHOT_URL_PREFIX}/agentdesk-supplier-log", headers={"if-none-match": f"W/{etag}"}
         )
@@ -776,9 +772,7 @@ async def test_search_is_unchanged_for_a_client_that_ignores_the_new_fields() ->
         await with_shots.aclose()
         await manager_a.__aexit__(None, None, None)
 
-    without, manager_b = await _client(
-        FakeRetriever(passages=passages), screenshots=ScreenshotCatalogue.empty()
-    )
+    without, manager_b = await _client(FakeRetriever(passages=passages), screenshots=ScreenshotCatalogue.empty())
     try:
         stage1 = (await without.post("/api/search", json={"query": "hotel has no room"})).json()
     finally:
@@ -985,3 +979,102 @@ def test_every_generated_screenshot_is_servable_under_the_id_ingestion_uses() ->
         assert (record.width, record.height) == (visual.image_width, visual.image_height)
         assert record.procedure_id == visual.procedure_id
         assert record.step_order == visual.step_order
+
+
+# --------------------------------------------------------------------------- #
+# A screenshot belongs to one procedure
+# --------------------------------------------------------------------------- #
+
+
+def _borrowed_passage() -> Passage:
+    """An NW-HTL-021 passage that names NW-HTL-014's screenshots.
+
+    Not contrived: NW-HTL-021 declares `agentdesk-booking-detail-status` and
+    `agentdesk-supplier-log` on its own steps, so the rendered document really
+    does contain those ids under an NW-HTL-021 heading. Observed live before the
+    fix — a search for the Arabic booking-status question returned NW-HTL-021 at
+    rank 2 carrying both of NW-HTL-014's captures.
+    """
+    return Passage(
+        chunk_id="borrowed",
+        document_id="doc-NW-HTL-021",
+        procedure_id="NW-HTL-021",
+        title="Property cannot locate a booking that Northwind Travel shows as confirmed",
+        content=(
+            "### Step 1 — Screen: Booking Detail — Control: Booking status chip\n\n"
+            "**Step ID:** `NW-HTL-021#S01`\n\n"
+            "Confirm the booking status before contacting the property.\n\n"
+            "**Screenshot reference:** `agentdesk-booking-detail-status` "
+            "(original screenshot is attached to this step in the knowledge base)"
+        ),
+        score=0.63,
+        product_line="hotels",
+        version="1.4",
+        effective_date="2026-02-10",
+    )
+
+
+async def test_a_procedure_is_never_given_another_procedures_screenshot() -> None:
+    """The capture is watermarked with the procedure and step it was made for.
+
+    Attaching it elsewhere would caption an NW-HTL-021 result with "procedure
+    NW-HTL-014, step 1" — a different procedure, a different version and a
+    different step number. The ingestion side already refuses to reuse these two
+    captures; this is the same rule on the way out.
+    """
+    retriever = FakeRetriever(passages=(_borrowed_passage(),))
+    client, manager = await _client(retriever)
+    try:
+        response = await client.post("/api/search", json={"query": "booking status chip"})
+    finally:
+        await client.aclose()
+        await manager.__aexit__(None, None, None)
+
+    procedure = response.json()["procedures"][0]
+    assert procedure["procedure_id"] == "NW-HTL-021"
+    citation = procedure["citations"][0]
+    # The id really is in the text, so a text-only match would have attached it.
+    assert "agentdesk-booking-detail-status" in citation["snippet"]
+    assert citation["screenshot"] is None
+
+
+async def test_the_owning_procedure_still_gets_its_screenshot() -> None:
+    """The guard must not cost the case it exists to protect."""
+    retriever = FakeRetriever(passages=(_visual_passage(), _borrowed_passage()))
+    client, manager = await _client(retriever)
+    try:
+        response = await client.post("/api/search", json={"query": "booking status chip"})
+    finally:
+        await client.aclose()
+        await manager.__aexit__(None, None, None)
+
+    procedures = {p["procedure_id"]: p for p in response.json()["procedures"]}
+    owner = procedures["NW-HTL-014"]["citations"][0]["screenshot"]
+    assert owner is not None
+    assert owner["screenshot_id"] == "agentdesk-booking-detail-status"
+    assert owner["procedure_id"] == "NW-HTL-014"
+    assert procedures["NW-HTL-021"]["citations"][0]["screenshot"] is None
+
+
+def test_the_two_procedures_really_do_share_screenshot_ids() -> None:
+    """Guards the premise: if the corpus stops sharing ids, these tests go quiet.
+
+    Read from the committed YAML rather than asserted from memory, so the day
+    NW-HTL-021 gets its own captures this fails and says so instead of passing
+    vacuously.
+    """
+    from agentpath_ingestion.dataset import load_procedures
+
+    declared: dict[str, set[str]] = {}
+    for loaded in load_procedures():
+        declared[loaded.procedure_id] = {step.screenshot for step in loaded.procedure.steps if step.screenshot}
+
+    shared = declared.get("NW-HTL-014", set()) & declared.get("NW-HTL-021", set())
+    assert shared, "the cross-attribution guard is only meaningful while ids are shared"
+    catalogue = ScreenshotCatalogue.load()
+    for screenshot_id in shared:
+        record = catalogue.resolve(screenshot_id)
+        if record is not None:
+            assert record.procedure_id == "NW-HTL-014", (
+                "the committed capture belongs to NW-HTL-014, which is why it must not be shown for NW-HTL-021"
+            )

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -528,3 +529,167 @@ def test_cli_validate_fails_cleanly_on_a_broken_dataset(tmp_path: Path, capsys: 
 def test_procedures_directory_is_where_the_loader_expects_it() -> None:
     assert procedures_dir() == REPO_ROOT / "data" / "synthetic" / "procedures"
     assert procedures_dir().is_dir()
+
+
+# --------------------------------------------------------------------------- #
+# English control labels survive translation
+# --------------------------------------------------------------------------- #
+#
+# T7 measured English control-label preservation at 0/4 and the cause was the
+# corpus, not the model: NW-HTL-014's own ``instruction_ar`` wrote
+# ``"إعادة الحجز والربط"`` where the step declares ``ui_element: Rebook and
+# Link``, so an Arabic answer that was maximally faithful to the evidence *lost*
+# the label. Faithfulness and label preservation contradicted each other, and no
+# amount of prompting can satisfy both.
+#
+# The corpus rule that removes the contradiction: an Arabic instruction keeps the
+# English label verbatim and puts the Arabic gloss after it in brackets -
+# ``اضغط Rebook and Link (إعادة الحجز والربط)``. The agent can then find the
+# control on screen and still read the sentence.
+#
+# Two checks, because one direction is mechanically decidable and the other needs
+# the corpus to declare its own translations:
+#
+# 1. If the *English* instruction quotes the step's declared control label
+#    verbatim, the Arabic instruction must quote it too. Capitalisation is the
+#    corpus's own signal: "read the cancellation terms" uses a common noun,
+#    "through Request Waiver Approval" names a button.
+# 2. No Arabic gloss may appear anywhere in the corpus without the English label
+#    it glosses. The gloss pairs are harvested from the YAML itself, so reverting
+#    any one of these edits fails the test without anything having to be listed
+#    twice.
+
+#: ``Rebook and Link (إعادة الحجز والربط)`` - an English UI string followed by its
+#: Arabic gloss in brackets. This is the shape the corpus commits to.
+GLOSSED_LABEL = re.compile(r"([A-Z][A-Za-z]*(?: [A-Za-z]+)*)\s*\(([\u0600-\u06FF][^)]*)\)")
+
+#: A gloss shorter than this is a single common word whose appearance elsewhere
+#: says nothing. The shortest real gloss in the corpus is 5 characters.
+MIN_GLOSS_LENGTH = 5
+
+
+def _steps_with_arabic(dataset: list[LoadedProcedure]):
+    for item in dataset:
+        for step in item.procedure.steps:
+            if step.instruction_ar:
+                yield item.procedure_id, step
+
+
+def find_translated_control_labels(procedures: list[LoadedProcedure]) -> list[str]:
+    """Steps whose Arabic instruction dropped a control label the English keeps.
+
+    A function rather than an inline loop so the guard itself can be tested
+    against a planted violation - a check that cannot fail is not a check.
+    """
+    violations = []
+    for procedure_id, step in _steps_with_arabic(procedures):
+        label = step.ui_element
+        if not label or label not in step.instruction:
+            continue
+        if label not in (step.instruction_ar or ""):
+            violations.append(f"{procedure_id}#{step.step_id}: instruction_ar drops the control label {label!r}")
+    return violations
+
+
+def harvest_glosses(procedures: list[LoadedProcedure]) -> dict[str, str]:
+    """Every ``Label (gloss)`` pair the corpus's Arabic instructions declare."""
+    glosses: dict[str, str] = {}
+    for _procedure_id, step in _steps_with_arabic(procedures):
+        for label, gloss in GLOSSED_LABEL.findall(step.instruction_ar or ""):
+            cleaned = gloss.strip()
+            if len(cleaned) >= MIN_GLOSS_LENGTH:
+                glosses[cleaned] = label
+    return glosses
+
+
+def find_glosses_standing_in_for_a_label(procedures: list[LoadedProcedure]) -> list[str]:
+    """Arabic instructions using a known gloss where the English label is absent."""
+    glosses = harvest_glosses(procedures)
+    violations = []
+    for procedure_id, step in _steps_with_arabic(procedures):
+        arabic = step.instruction_ar or ""
+        for gloss, label in glosses.items():
+            if gloss in arabic and label not in arabic:
+                violations.append(
+                    f"{procedure_id}#{step.step_id}: uses the Arabic gloss {gloss!r} without the English {label!r}"
+                )
+    return violations
+
+
+def test_an_arabic_instruction_never_translates_away_its_own_control_label(
+    dataset: list[LoadedProcedure],
+) -> None:
+    assert find_translated_control_labels(dataset) == []
+
+
+def test_the_control_label_guard_catches_a_planted_translation() -> None:
+    """The negative control for the check above."""
+    payload = _minimal_procedure_payload()
+    payload["steps"][0] |= {
+        "instruction": "Submit the request through Request Waiver Approval before anything else",
+        "instruction_ar": 'أرسل الطلب عبر "طلب موافقة على الاستثناء" قبل أي شيء آخر',
+        "screen": "Waiver Grounds",
+        "ui_element": "Request Waiver Approval",
+    }
+    planted = [LoadedProcedure(path=Path("NW-TST-001.yaml"), procedure=Procedure.model_validate(payload))]
+
+    (violation,) = find_translated_control_labels(planted)
+    assert "Request Waiver Approval" in violation
+
+
+def test_the_corpus_declares_the_glosses_it_uses(dataset: list[LoadedProcedure]) -> None:
+    """The label/gloss pairs are in the data, so nothing has to be listed twice."""
+    glosses = harvest_glosses(dataset)
+    assert glosses, "no English label carries an Arabic gloss; the convention is not being used"
+    # The two labels T7 gated on, and the one whose absence caused the 0/4.
+    assert glosses.get("إعادة الحجز والربط") == "Rebook and Link"
+    assert "Log supplier contact" in glosses.values()
+
+
+def test_no_arabic_gloss_stands_in_for_the_english_label_it_glosses(
+    dataset: list[LoadedProcedure],
+) -> None:
+    """Reverting any one of these edits reintroduces the T7 failure. This catches it."""
+    assert find_glosses_standing_in_for_a_label(dataset) == []
+
+
+def test_the_gloss_guard_catches_a_reverted_edit(dataset: list[LoadedProcedure]) -> None:
+    """The negative control: put a declared gloss back on its own and it is flagged."""
+    payload = _minimal_procedure_payload()
+    payload["steps"][0] |= {
+        "instruction": "Issue the alternative with Rebook and Link and keep the case attached",
+        "instruction_ar": "أصدر الحجز البديل باستخدام إعادة الحجز والربط",
+        "screen": "Relocation Finder",
+        "ui_element": "Rebook and Link",
+    }
+    reverted = [*dataset, LoadedProcedure(path=Path("NW-TST-001.yaml"), procedure=Procedure.model_validate(payload))]
+
+    violations = find_glosses_standing_in_for_a_label(reverted)
+    assert any("إعادة الحجز والربط" in violation for violation in violations)
+
+
+def test_control_names_are_read_from_the_field_not_parsed_from_prose(
+    dataset: list[LoadedProcedure],
+) -> None:
+    """``ui_element`` stays the authoritative source for a control name.
+
+    The label appearing in the instruction text is a convenience for lexical
+    retrieval and for an agent reading the sentence. It is never the source: the
+    answer layer reads ``ui_element`` (as ``StepRecord.control_name``), which is
+    why a step can name a control the prose never mentions - and most of them do.
+    """
+    with_control = [step for _id, step in _steps_with_arabic(dataset) if step.ui_element]
+    assert with_control
+    unnamed = [step for step in with_control if step.ui_element not in step.instruction]
+    assert unnamed, "every control happens to be quoted in prose, so this guarantee is untested"
+
+
+def test_the_rendered_document_carries_the_english_label_inside_the_arabic_line(
+    dataset: list[LoadedProcedure],
+) -> None:
+    """The fix has to survive rendering, because that is what gets indexed."""
+    item = next(i for i in dataset if i.procedure_id == "NW-HTL-014")
+    markdown = render_markdown(item.procedure)
+    arabic_line = next(line for line in markdown.splitlines() if "إعادة الحجز والربط" in line)
+    assert arabic_line.startswith("**عربي:**")
+    assert "Rebook and Link" in arabic_line

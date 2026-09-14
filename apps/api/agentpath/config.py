@@ -13,6 +13,7 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agentpath.paths import lexicon_path, repo_root
+from agentpath.paths import procedures_dir as procedures_directory
 from agentpath.paths import screenshots_dir as screenshots_directory
 
 
@@ -35,9 +36,7 @@ class Settings(BaseSettings):
     # -- RAGFlow ---------------------------------------------------------- #
     ragflow_base_url: str = Field(default="http://127.0.0.1:9380", validation_alias="RAGFLOW_BASE_URL")
     ragflow_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="RAGFLOW_API_KEY")
-    ragflow_dataset_name: str = Field(
-        default="agentpath-northwind-procedures", validation_alias="RAGFLOW_DATASET_NAME"
-    )
+    ragflow_dataset_name: str = Field(default="agentpath-northwind-procedures", validation_alias="RAGFLOW_DATASET_NAME")
     # RAGFlow model references are "{model}@{instance}@{provider}".
     ragflow_embedding_model: str = Field(
         default="BAAI/bge-m3@agentpath-embedder@HuggingFace",
@@ -58,9 +57,7 @@ class Settings(BaseSettings):
     # Engine-side floor: chunks below this are not returned at all. Kept low so
     # the abstention decision is made by our own graded thresholds below, where it
     # can be explained to the agent, rather than silently by the engine.
-    similarity_threshold: float = Field(
-        default=0.15, ge=0.0, le=1.0, validation_alias="RAGFLOW_SIMILARITY_THRESHOLD"
-    )
+    similarity_threshold: float = Field(default=0.15, ge=0.0, le=1.0, validation_alias="RAGFLOW_SIMILARITY_THRESHOLD")
     rerank_candidates: int = Field(default=32, ge=1, validation_alias="RAGFLOW_RERANK_CANDIDATES")
     page_size: int = Field(default=12, ge=1, validation_alias="RAGFLOW_PAGE_SIZE")
 
@@ -76,9 +73,7 @@ class Settings(BaseSettings):
     # keywords and appends them to the question, which costs a chat-model round
     # trip per search. AgentPath does that expansion deterministically from
     # data/synthetic/lexicon.yaml instead, so this stays off.
-    ragflow_llm_keyword_expansion: bool = Field(
-        default=False, validation_alias="RAGFLOW_LLM_KEYWORD_EXPANSION"
-    )
+    ragflow_llm_keyword_expansion: bool = Field(default=False, validation_alias="RAGFLOW_LLM_KEYWORD_EXPANSION")
     # Same reasoning: RAGFlow's ``cross_languages`` translates the query with an
     # LLM. Our bilingual lexicon covers the Arabic/English pivot without one.
     ragflow_cross_languages: list[str] = Field(default_factory=list, validation_alias="RAGFLOW_CROSS_LANGUAGES")
@@ -93,17 +88,60 @@ class Settings(BaseSettings):
 
     # -- Ollama (Stage 2 answer generation) -------------------------------- #
     # Called from this process over loopback, so it needs no container network
-    # access and stays bound to 127.0.0.1. Unused during the search slice.
+    # access and stays bound to 127.0.0.1. Ollama runs natively on the host, not
+    # in Docker, so the CUDA-in-Docker failure that keeps the reranker on CPU does
+    # not apply to this path: 34/34 layers of the chat model load onto the GPU.
     ollama_host_url: str = Field(default="http://127.0.0.1:11434", validation_alias="OLLAMA_HOST_URL")
-    ollama_chat_model: str = Field(default="qwen2.5:7b-instruct", validation_alias="OLLAMA_CHAT_MODEL")
+    ollama_chat_model: str = Field(default="qwen3.5:4b", validation_alias="OLLAMA_CHAT_MODEL")
+    # Generous next to ragflow_timeout_seconds because the units differ: retrieval
+    # is a database query, generation is hundreds of forward passes, and the first
+    # request after a cold start also pays to move ~3 GB of weights into VRAM.
+    ollama_timeout_seconds: float = Field(default=120.0, validation_alias="OLLAMA_TIMEOUT_SECONDS")
+
+    # Context window. The model advertises 262144; we ask for 8192 on purpose.
+    # The KV cache is allocated when the model loads, not when a long prompt
+    # arrives, so a window we never fill is VRAM spent for nothing on an 8 GB
+    # card. Measured at 8192: 256 MiB of KV cache. One procedure's evidence fits
+    # in roughly a quarter of the window.
+    ollama_num_ctx: int = Field(default=8192, ge=512, validation_alias="OLLAMA_NUM_CTX")
+    # Greedy decoding. A grounded answer that changes between two identical
+    # requests cannot be regression-tested, and creative wording has no value
+    # when every sentence has to trace to a procedure step.
+    ollama_temperature: float = Field(default=0.0, ge=0.0, validation_alias="OLLAMA_TEMPERATURE")
+    ollama_seed: int = Field(default=20260301, validation_alias="OLLAMA_SEED")
+    # A ceiling, not a target: without it a generation that goes wrong runs to the
+    # context limit instead of failing visibly.
+    ollama_num_predict: int = Field(default=1536, ge=64, validation_alias="OLLAMA_NUM_PREDICT")
+    # qwen3.5:4b advertises a "thinking" capability and thinks by default.
+    # Measured on this host: with thinking left on, a 64-token budget was spent
+    # entirely on reasoning and the answer content came back *empty*. Off unless
+    # someone deliberately turns it on.
+    ollama_think: bool = Field(default=False, validation_alias="OLLAMA_THINK")
+    # How long Ollama holds the weights in VRAM after a request. Ollama's own
+    # default; not raised, because on an 8 GB card the desktop compositor is a
+    # co-tenant and pinning 3 GB indefinitely is the wrong trade here.
+    ollama_keep_alive: str = Field(default="5m", validation_alias="OLLAMA_KEEP_ALIVE")
 
     # -- search behaviour -------------------------------------------------- #
     top_procedures: int = Field(default=3, ge=1, le=10, validation_alias="AGENTPATH_TOP_PROCEDURES")
     lexicon_file: Path = Field(default_factory=lexicon_path, validation_alias="AGENTPATH_LEXICON_PATH")
     # The only directory the screenshot route can serve from. Overridable for the
     # same reason the lexicon path is: a container mounts the data elsewhere.
-    screenshots_dir: Path = Field(
-        default_factory=screenshots_directory, validation_alias="AGENTPATH_SCREENSHOTS_DIR"
+    screenshots_dir: Path = Field(default_factory=screenshots_directory, validation_alias="AGENTPATH_SCREENSHOTS_DIR")
+    # The structured source the answer path rebuilds its evidence from. Read once
+    # at startup by agentpath.procedures, never during a request: retrieved chunk
+    # text is a pointer to a step, and the step's own words come from here.
+    procedures_dir: Path = Field(default_factory=procedures_directory, validation_alias="AGENTPATH_PROCEDURES_DIR")
+    # Ceiling on how many whole steps one generation may be given.
+    #
+    # Was 12 on the assumption that the binding cost was prompt evaluation. It is
+    # not. Measured with `make model-check` at 12: prompt evaluation a few hundred
+    # milliseconds, decoding ~10.5 s, p95 14.7 s against a 10 s target - because
+    # given twelve steps the model answered by reciting all of them. The cap that
+    # matters is on how much the model is invited to say, so this also bounds the
+    # answer's step count via the schema's maxItems.
+    answer_max_evidence_blocks: int = Field(
+        default=6, ge=1, le=40, validation_alias="AGENTPATH_ANSWER_MAX_EVIDENCE_BLOCKS"
     )
 
     # Evidence thresholds.
@@ -132,9 +170,7 @@ class Settings(BaseSettings):
         """A strong threshold below the partial threshold would be meaningless."""
         partial = info.data.get("evidence_partial_score")
         if partial is not None and value < partial:
-            raise ValueError(
-                f"evidence_strong_score ({value}) must be at least evidence_partial_score ({partial})"
-            )
+            raise ValueError(f"evidence_strong_score ({value}) must be at least evidence_partial_score ({partial})")
         return value
 
     @field_validator("ragflow_base_url", "ollama_host_url", "reranker_url", "embedder_url")

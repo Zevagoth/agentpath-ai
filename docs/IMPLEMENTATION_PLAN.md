@@ -21,7 +21,7 @@ and explicit abstention when the knowledge base has no answer.
 | Answer model | `qwen2.5:7b-instruct` via host Ollama | Stage 2; called from the API over loopback, so it needs no container networking |
 | API | FastAPI, Python 3.12 via uv | |
 | Web | Next.js 15 + React 19, plain CSS | RTL/LTR per field |
-| Tests | Pytest, Vitest, Playwright | 263 backend, 20 web unit, 5 live UI, 5 browser specs |
+| Tests | Pytest, Vitest, Playwright | 614 backend, 2 integration, 20 web unit, 5 live UI, 5 browser specs |
 
 Replaceability: application code depends on the `Retriever` port in
 `agentpath.retrieval.ports`. `RAGFlowRetriever` is the only production
@@ -131,17 +131,33 @@ until retrieval is working and measured. That condition is now met.
 4. **Five procedures.** Retrieval quality will move as the corpus grows.
 5. **No CI yet.** Test counts are local.
 
-## Stage 2 (not started, in order)
+## Stage 2
 
-1. Deterministic screenshot generation: committed HTML/CSS AgentDesk mocks rendered
-   by Playwright, watermarked.
-2. Expand to 12+ procedures with screenshot steps; ingest images as chunks with OCR
-   text, step metadata and structured descriptions, all computed at ingestion.
-3. Grounded answer generation on `qwen2.5:7b-instruct`: steps, clarification
-   questions, conditions, escalation, customer wording, citations everywhere,
-   conflict surfacing by version, and the exact abstention message.
-4. Full console: answer card, screenshots beside their steps, do/don't, feedback
-   buttons.
-5. Evaluation at 50+ queries with a held-out split for threshold tuning, and
-   citation-correctness scoring.
-6. GitHub Actions, then containerize the API and web app for one-command startup.
+Split into three gated parts. See `docs/STAGE2A_PLAN.md` for the full task list,
+the measured findings and the known limitations.
+
+**2A — the `NW-HTL-014` vertical slice.** In progress on branch
+`stage2-grounded-assistant`.
+
+1. ✅ Playwright usable without its own browser download (`make browser-check`).
+2. ✅ Deterministic screenshot generation: committed HTML/CSS AgentDesk screens
+   rendered by Playwright, watermarked, verified by DOM text plus a perceptual hash
+   rather than byte equality.
+3. ✅ Visual-step data model with a stable `step_id`, strict on stale captures.
+4. ✅ Image-bearing RAGFlow chunks (`image_base64`), idempotent against RAGFlow's
+   image-concatenation behaviour.
+5. ✅ Screenshot serving route, resolved against a catalogue built at startup so no
+   request input reaches a path operation.
+6. ✅ Grounded answer generation on **`qwen3.5:4b`** (not `qwen2.5:7b-instruct`,
+   which was a placeholder default): evidence rebuilt from the structured source,
+   `enum`-constrained citations, server-attached attribution, clarification,
+   conflict surfacing, and the exact abstention message without an LLM call.
+7. ⬜ `POST /api/answer`.
+8. ⬜ `case_context` contract, design only.
+9. ⬜ Console: answer card, screenshots beside their steps, do/don't, feedback.
+
+**2B — expansion and evaluation.** Not started. 12+ procedures, 50+ queries with a
+frozen held-out split, citation-correctness scoring.
+
+**2C — packaging.** Not started. GitHub Actions with triggers disabled, then
+containerise the API and web app.

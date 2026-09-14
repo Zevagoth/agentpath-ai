@@ -101,8 +101,8 @@ steps:
       If the window has passed, open Payment Trace and submit a trace with the
       refund reference and the payment method details from the booking.
     instruction_ar: >-
-      إذا انتهت المدة، افتح "تتبع الدفعة" وأرسل طلب تتبع مع مرجع الاسترداد وتفاصيل
-      وسيلة الدفع من الحجز.
+      إذا انتهت المدة، افتح Payment Trace (تتبع الدفعة) وأرسل طلب تتبع مع مرجع
+      الاسترداد وتفاصيل وسيلة الدفع من الحجز.
     screen: Payment Trace
     ui_element: Open trace
     expected_result: A payment trace exists with a case reference the customer can quote.

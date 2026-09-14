@@ -66,8 +66,8 @@ steps:
       Open the booking in AgentDesk and confirm on the Booking Detail screen that
       the status chip reads Confirmed. Note the booking reference and the room type.
     instruction_ar: >-
-      افتح الحجز في AgentDesk وتأكد من شاشة تفاصيل الحجز أن حالة الحجز "مؤكد".
-      سجّل رقم الحجز ونوع الغرفة.
+      افتح الحجز في AgentDesk وتأكد من شاشة تفاصيل الحجز أن Booking status chip
+      (شريحة حالة الحجز) تقرأ Confirmed (مؤكد). سجّل رقم الحجز ونوع الغرفة.
     screen: Booking Detail
     ui_element: Booking status chip
     expected_result: Status chip shows Confirmed and the stay dates match the guest's report.
@@ -98,8 +98,9 @@ steps:
       Log the call in the Supplier Log with the outcome "Cannot accommodate" and
       paste the details captured in step 3.
     instruction_ar: >-
-      سجّل المكالمة في سجل المورد باستخدام النتيجة "غير قادر على الاستقبال" وأضف
-      التفاصيل التي جمعتها في الخطوة 3.
+      سجّل المكالمة عبر Log supplier contact (تسجيل اتصال المورد) في سجل المورد
+      باستخدام النتيجة Cannot accommodate (غير قادر على الاستقبال) وأضف التفاصيل
+      التي جمعتها في الخطوة 3.
     screen: Supplier Log
     ui_element: Log supplier contact
     expected_result: A timestamped supplier log entry exists on the booking.
@@ -130,8 +131,9 @@ steps:
       to the original case. Do not cancel the original booking until the new
       confirmation number is visible.
     instruction_ar: >-
-      أصدر الحجز البديل باستخدام "إعادة الحجز والربط" ليبقى مرتبطاً بالحالة
-      الأصلية. لا تُلغِ الحجز الأصلي قبل ظهور رقم تأكيد الحجز الجديد.
+      أصدر الحجز البديل باستخدام Rebook and Link (إعادة الحجز والربط) ليبقى
+      مرتبطاً بالحالة الأصلية. لا تُلغِ الحجز الأصلي قبل ظهور رقم تأكيد الحجز
+      الجديد.
     screen: Relocation Finder
     ui_element: Rebook and Link
     expected_result: A linked alternative booking exists with its own confirmation number.

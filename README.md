@@ -94,15 +94,23 @@ Counts as of the last run:
 
 | Suite | Command | Tests | Needs the stack |
 | --- | --- | --- | --- |
-| Backend | `make test` | 263 | no |
+| Backend | `make test` | 614 | no |
+| Backend integration | `make test-integration` | 2 | yes |
 | Web unit | `make test-web` | 20 | no |
 | Live UI | `make test-web-live` | 5 | yes |
-| Browser (Playwright) | `make test-e2e` | 5 specs | yes, plus a browser download |
+| Browser (Playwright) | `make test-e2e` | 5 specs | yes, plus a browser |
 
-The Playwright specs are committed but unverified on the reference machine: the
-Chromium download stalls during extraction there. The same five assertions run
-through `make test-web-live`, which drives the real components against the real API
-in jsdom.
+Playwright no longer needs its own 174 MB download. Point it at a Chromium already
+on the machine and `make browser-check` will report which binary it resolved and
+why:
+
+```bash
+export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+make browser-check
+```
+
+Unset, the behaviour is unchanged: the downloaded build is used, and
+`make install-web-browsers` fetches it.
 
 ## How it works
 

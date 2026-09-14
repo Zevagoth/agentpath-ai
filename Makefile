@@ -106,6 +106,10 @@ screenshots: ## Render the synthetic AgentDesk screens to PNG + sidecar JSON
 screenshots-check: ## Re-render the screens and verify them without writing
 	@cd apps/web && node scripts/generate-screenshots.mjs --check
 
+.PHONY: model-check
+model-check: ## Measure whether OLLAMA_CHAT_MODEL is fit to answer from (needs the live stack)
+	@uv run python scripts/measure_model_fitness.py
+
 .PHONY: api
 api: ## Run the FastAPI service on 127.0.0.1:8000
 	@uv run uvicorn agentpath.api.app:app --host 127.0.0.1 --port 8000 --reload

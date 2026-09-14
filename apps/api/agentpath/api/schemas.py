@@ -36,9 +36,7 @@ class SearchRequest(BaseModel):
         description="The case in the agent's own words, Arabic or English.",
         examples=["hotel has no room for the guest", "الفندق ما عنده غرف والضيف واصل"],
     )
-    product_line: (
-        Literal["hotels", "flights", "cancellations", "refunds", "escalations"] | None
-    ) = Field(
+    product_line: Literal["hotels", "flights", "cancellations", "refunds", "escalations"] | None = Field(
         default=None,
         description="Optional filter. When set, only procedures in this product line are searched.",
     )
@@ -173,12 +171,8 @@ class Citation(BaseModel):
     document_id: str
     snippet: str = Field(description="Engine highlight when available, otherwise the chunk text.")
     score: float
-    lexical_score: float | None = Field(
-        default=None, description="BM25 term similarity contribution."
-    )
-    semantic_score: float | None = Field(
-        default=None, description="Vector similarity contribution."
-    )
+    lexical_score: float | None = Field(default=None, description="BM25 term similarity contribution.")
+    semantic_score: float | None = Field(default=None, description="Vector similarity contribution.")
     # Additive, and optional in the strong sense: `null` whenever the passage does
     # not name a screenshot this service holds, which is the case for every
     # procedure outside the Stage 2A slice. A client written against the Stage 1
@@ -193,8 +187,23 @@ class Citation(BaseModel):
     )
 
 
-def _screenshot_for(content: str, screenshots: ScreenshotCatalogue) -> ScreenshotRef | None:
+def _screenshot_for(content: str, screenshots: ScreenshotCatalogue, *, procedure_id: str) -> ScreenshotRef | None:
     """Map a retrieved chunk to the screenshot it depicts, if any.
+
+    ``procedure_id`` is required, not optional, because the chunk text alone is
+    not sufficient evidence. Two procedures reference the same screen: both
+    ``NW-HTL-014`` and ``NW-HTL-021`` declare ``agentdesk-booking-detail-status``
+    and ``agentdesk-supplier-log``, so an ``NW-HTL-021`` passage contains those
+    ids and a text-only match attaches ``NW-HTL-014``'s capture to it. That was
+    observed live: a search for the Arabic booking-status question returned
+    ``NW-HTL-021`` at rank 2 carrying both of ``NW-HTL-014``'s screenshots.
+
+    The image is wrong to show, not merely mismatched metadata. Every capture is
+    watermarked with the procedure and step it was generated for, so the agent
+    would be reading "procedure NW-HTL-014, step 1" beside an NW-HTL-021 result,
+    at a different version, for a different step number. The ingestion side
+    already refuses this - ``visual_steps`` reports those two as gaps rather than
+    reusing the captures - and this is the same rule applied on the way out.
 
     The chunk's own text is the mapping. Three alternatives were available and
     each was rejected:
@@ -223,7 +232,9 @@ def _screenshot_for(content: str, screenshots: ScreenshotCatalogue) -> Screensho
     if not screenshots:
         return None
     screenshot = screenshots.for_chunk_text(content)
-    return ScreenshotRef.from_screenshot(screenshot) if screenshot is not None else None
+    if screenshot is None or screenshot.procedure_id != procedure_id:
+        return None
+    return ScreenshotRef.from_screenshot(screenshot)
 
 
 class ProcedureCard(BaseModel):
@@ -265,13 +276,9 @@ class ProcedureCard(BaseModel):
                     document_id=passage.document_id,
                     snippet=passage.snippet,
                     score=round(passage.score, 4),
-                    lexical_score=(
-                        round(passage.lexical_score, 4) if passage.lexical_score is not None else None
-                    ),
-                    semantic_score=(
-                        round(passage.semantic_score, 4) if passage.semantic_score is not None else None
-                    ),
-                    screenshot=_screenshot_for(passage.content, catalogue),
+                    lexical_score=(round(passage.lexical_score, 4) if passage.lexical_score is not None else None),
+                    semantic_score=(round(passage.semantic_score, 4) if passage.semantic_score is not None else None),
+                    screenshot=_screenshot_for(passage.content, catalogue, procedure_id=hit.procedure_id),
                 )
                 for passage in hit.passages
             ],

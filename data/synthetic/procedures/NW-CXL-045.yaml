@@ -101,8 +101,8 @@ steps:
       recorded under the duplicate handling path rather than as a customer-initiated
       cancellation.
     instruction_ar: >-
-      ألغِ الحجز الزائد باستخدام "إلغاء كحجز مكرر" ليُسجّل الإلغاء تحت مسار معالجة
-      التكرار وليس كإلغاء بمبادرة العميل.
+      ألغِ الحجز الزائد باستخدام Cancel as Duplicate (إلغاء كحجز مكرر) ليُسجّل
+      الإلغاء تحت مسار معالجة التكرار وليس كإلغاء بمبادرة العميل.
     screen: Booking Detail
     ui_element: Cancel as Duplicate
     expected_result: The redundant booking is cancelled with the duplicate reason recorded.

@@ -243,3 +243,93 @@ and no broken links. Commit as a coherent local checkpoint, then stop.
 17. No service restart loops; resource use stays reasonable.
 
 Then stop and report before any 2B work.
+
+---
+
+# Progress and measured findings
+
+Recorded as the work happened, including the failures. T0–T6 are committed
+(`547b2a3`, `7602774`).
+
+## T7 — model acceptance
+
+`qwen3.5:4b` was pulled at 3.39 GB, verified against the registry manifest before
+downloading and confirmed after. 34/34 layers offload to the GPU (`ollama ps`
+reports 100% GPU at `num_ctx` 8192). `qwen3.5:9b` was never pulled: the user
+refused it on the evidence that the failures were ours, not the model's.
+
+Three Ollama behaviours were established empirically, not from documentation:
+
+- **`think` is a top-level field** on `/api/chat`. Inside `options` it is silently
+  ignored, and a thinking model then spends its whole budget reasoning and returns
+  **empty** content.
+- **`format` accepts a full JSON Schema**, `$defs`/`$ref` included, and both
+  `pattern` and `enum` are compiled into the decoding grammar. That is what makes
+  a nonexistent citation unreachable rather than merely discouraged.
+- **The model ships `presence_penalty 1.5`**, which penalises the repeated step
+  tokens a grounded answer is built from. Overridden to 0, and every option is now
+  sent explicitly including the zeros, because an absent key inherits the model's
+  value.
+
+The first acceptance run failed on two counts, and both were defects in our own
+pipeline:
+
+1. Four unsupported claims, all the single fabricated token `NW-HTL-014#S10`.
+   RAGFlow chunks on size, not step boundaries, so a chunk began mid-step-6 with
+   its `**Step ID:**` line cut away. The first visible token named step 7, so the
+   model paired the orphan with it and shifted every later citation by one until it
+   ran off the end. Where evidence was clean, attribution was 12/12.
+2. English control labels lost in Arabic answers, because the corpus itself
+   translated them: `NW-HTL-014.yaml` wrote `"إعادة الحجز والربط"` for
+   `Rebook and Link`. Faithfulness to the evidence and label preservation
+   contradicted each other, and no prompt can satisfy both.
+
+## T8 — what changed
+
+Retrieval became a **pointer**. RAGFlow still decides which procedure and which
+steps are relevant; the bytes the model reads are rebuilt whole from
+`agentpath.procedures`, so a truncated chunk can no longer put a step boundary in
+the wrong place. A side benefit worth stating: retrieved *text* never reaches the
+model, so text pasted into the knowledge base can at most influence which step ids
+are selected — its words are discarded.
+
+The corpus was corrected in all five procedures so an English control label
+survives inside the Arabic instruction with the gloss after it, e.g.
+`اضغط Rebook and Link (إعادة الحجز والربط)`, and `control_name` remains the only
+authoritative source for a button name.
+
+## Known limitations, honestly
+
+- **One retrieval regression, caused by the corpus edit.** `agentpath_full` R@1
+  moved 100% → 96% and MRR 1.000 → 0.981 on the 30-query development set. Exactly
+  one query: the bare procedure-id lookup `NW-HTL-014`, which now ranks second
+  behind `NW-HTL-021` (0.7642 against 0.7624 — the two procedures cross-reference
+  each other's ids, so a literal id query is a near-tie between them). R@3 stayed
+  100% and false abstention stayed 0%. The four demo checks are unchanged: English
+  0.6115 and misspelled 0.5950 both rank `NW-HTL-014` first, and the password query
+  abstains. **Not yet fixed.** An exact procedure-id lookup should be deterministic
+  rather than semantic, which is a query-understanding change and belongs in its own
+  commit.
+- **The 100% figure was never production accuracy.** It came from five procedures
+  and a 30-query set that was also used to fit the evidence thresholds. 96% is not
+  meaningfully worse than 100% at this corpus size; both are too small to
+  generalise from.
+- **One answerable Arabic question abstains.** "وين أسجل إني اتصلت بالفندق ورفض
+  يستقبل الضيف؟" scores below the 0.51 partial floor even though `NW-HTL-014#S04`
+  covers exactly it. A false abstention is the safe direction to fail in, but it is
+  a retrieval finding to carry into 2B.
+- **Screenshot cross-attribution, found and fixed.** `NW-HTL-021` results were
+  being served `NW-HTL-014`'s screenshots, because both procedures declare the same
+  screenshot ids and the mapping was text-only. Every capture is watermarked with
+  the procedure and step it was generated for, so an agent would have read
+  "procedure NW-HTL-014, step 1" beside an `NW-HTL-021` result at a different
+  version. A screenshot now has to belong to the procedure showing it.
+- **Determinism of the screenshots is per-machine.** The perceptual-hash tolerance
+  of 2 was calibrated against Chromium 153 with DejaVu fonts. A host resolving
+  different fonts will exceed it, which is a re-measure situation rather than a
+  silent pass.
+- **`make lint` fails repo-wide** for reasons that predate this work (ruff version
+  drift at `HEAD`). Files touched here are individually clean.
+- **`make help` omits `test-e2e`** because its grep lacks a digit class.
+- **Nine declared screenshots have no capture yet**, including both that
+  `NW-HTL-021` needs for itself. Ingestion reports them rather than skipping them.

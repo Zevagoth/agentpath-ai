@@ -110,8 +110,9 @@ steps:
       Submit the waiver through Request Waiver Approval. The request goes to the
       approver named on the case; the outcome is theirs, not yours.
     instruction_ar: >-
-      أرسل طلب الاستثناء عبر "طلب موافقة على الاستثناء". يُحال الطلب إلى الشخص
-      المعتمد المذكور في الحالة، والقرار يعود إليه وليس إليك.
+      أرسل طلب الاستثناء عبر Request Waiver Approval (طلب موافقة على الاستثناء).
+      يُحال الطلب إلى الشخص المعتمد المذكور في الحالة، والقرار يعود إليه وليس
+      إليك.
     screen: Waiver Grounds
     ui_element: Request Waiver Approval
     expected_result: A waiver request exists on the case with a decision pending.

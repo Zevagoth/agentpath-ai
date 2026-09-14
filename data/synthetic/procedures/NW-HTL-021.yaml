@@ -61,8 +61,9 @@ steps:
       and a supplier confirmation number is present. If the number is missing,
       this is a supplier transmission case, not a lookup failure.
     instruction_ar: >-
-      افتح شاشة تفاصيل الحجز وتأكد أن الحالة "مؤكد" وأن رقم تأكيد المورد موجود.
-      إذا كان الرقم غير موجود، فهذه حالة إرسال من المورد وليست فشل بحث.
+      افتح شاشة تفاصيل الحجز وتأكد أن Booking status chip (شريحة حالة الحجز) تقرأ
+      Confirmed (مؤكد) وأن رقم تأكيد المورد موجود. إذا كان الرقم غير موجود، فهذه
+      حالة إرسال من المورد وليست فشل بحث.
     screen: Booking Detail
     ui_element: Booking status chip
     expected_result: Confirmed status with a supplier confirmation number recorded.
@@ -126,7 +127,8 @@ steps:
       Raise a Supplier Record Mismatch flag on the booking so the supplier
       relations team can follow up on the root cause after the guest is settled.
     instruction_ar: >-
-      أضف علامة "عدم تطابق سجلات المورد" على الحجز ليتابع فريق علاقات الموردين
+      أضف علامة Supplier Record Mismatch (عدم تطابق سجلات المورد) على الحجز عبر
+      Flag supplier issue (الإبلاغ عن مشكلة مورد) ليتابع فريق علاقات الموردين
       السبب الجذري بعد استقرار الضيف.
     screen: Booking Detail
     ui_element: Flag supplier issue

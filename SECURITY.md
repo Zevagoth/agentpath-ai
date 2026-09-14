@@ -116,9 +116,40 @@ The product-level safety property is that the system does not invent procedure.
 - Suggested customer wording is labelled in the source documents as carrying no
   policy weight, so generated phrasing is never mistaken for retrieved policy.
 
-Answer generation is not implemented yet. When it is, the same rule applies: cite
-every procedural claim, and never state a limit, amount or approval rule that is
-not in a retrieved passage.
+### Grounded answer generation
+
+The answer service exists (`agentpath.generation`); the HTTP route that exposes it
+does not yet. Generation runs entirely on local Ollama. No procedure text,
+question, screenshot, embedding or prompt is sent to any third-party service.
+
+Four properties carry the grounding, and none of them is the prompt:
+
+- **The model never sees retrieved text.** RAGFlow decides which procedure and
+  which steps are relevant; the evidence handed to the model is rebuilt from the
+  committed procedure YAML. Text pasted into the knowledge base can therefore
+  influence *which steps are selected* but contributes no words to the answer.
+- **A citation outside the evidence is unreachable.** `step_id` is constrained by a
+  JSON-Schema `enum` over exactly the steps assembled for that request, and Ollama
+  compiles the schema into its decoding grammar. The service re-validates every
+  citation regardless, so a prompt or schema regression that removed the guarantee
+  would still be caught.
+- **The model does not write the attributable fields.** Procedure id, version,
+  control name, screenshot reference and source section are attached by the server
+  from the catalogue after the model chooses a step, so it cannot invent them.
+- **Insufficient evidence never reaches the model.** The evidence gate runs first
+  and returns the exact abstention message without calling Ollama; the result
+  records that no call was made, and the tests assert the absence of the call
+  rather than the presence of the message.
+
+`enum` prevents a citation that does not exist. It does not prevent a citation that
+exists and is semantically wrong, so attribution correctness is measured as a
+separate gate in `scripts/measure_model_fitness.py` and schema validity is never
+treated as evidence of grounding.
+
+Three outcomes are kept distinct, because an agent who cannot tell them apart
+learns to distrust the first: **abstained** (we looked, the knowledge base has no
+answer), **generation failed** (the evidence was there, the model server was not),
+and **empty query** (nothing was asked, so nothing was searched).
 
 ## Logging
 
