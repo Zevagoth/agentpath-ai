@@ -72,6 +72,13 @@ class QueryUnderstanding(BaseModel):
     scenario_tags: list[str] = Field(default_factory=list)
     detected_product_line: str | None = None
     requested_product_line: str | None = None
+    requested_procedure_id: str | None = Field(
+        default=None,
+        description=(
+            "A procedure id found in the query. When set, the search was restricted to "
+            "that procedure: an id is an exact request, not a search term."
+        ),
+    )
 
 
 class HighlightBox(BaseModel):
@@ -335,6 +342,7 @@ class SearchResponse(BaseModel):
                 scenario_tags=list(prepared.scenario_tags),
                 detected_product_line=prepared.detected_product_line,
                 requested_product_line=prepared.requested_product_line,
+                requested_procedure_id=prepared.requested_procedure_id,
             ),
             evidence=Evidence(
                 level=result.evidence,

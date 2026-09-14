@@ -68,9 +68,12 @@ class SearchService:
         retrieved = await self._retriever.retrieve(
             prepared,
             limit=limit,
-            # Only an explicit filter narrows the candidate set; see
+            # Only what the agent stated narrows the candidate set; see
             # RAGFlowRetriever._metadata_condition for why detection does not.
             product_line=prepared.requested_product_line,
+            # An id the agent typed is an exact request. Scoring it as text put the
+            # wrong procedure first, because the corpus cross-references ids.
+            procedure_id=prepared.requested_procedure_id,
         )
 
         aggregation_started = time.perf_counter()
@@ -93,6 +96,7 @@ class SearchService:
             language=prepared.language.value,
             scenario_tags=list(prepared.scenario_tags),
             product_line=prepared.effective_product_line,
+            procedure_lookup=prepared.requested_procedure_id,
             hits=[hit.procedure_id for hit in hits],
             evidence=evidence.value,
             abstained=evidence.value == "insufficient",

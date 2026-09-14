@@ -20,7 +20,7 @@
 | Vector similarity weight | 0.6 (term weight 0.4) |
 | Similarity threshold | 0.15 |
 | Evidence thresholds | strong ≥ 0.6, margin ≥ 0.05, partial ≥ 0.51 |
-| Generated | `2026-09-14T17:48:45+00:00` |
+| Generated | `2026-09-14T20:21:12+00:00` |
 | Host | Linux 7.2.4-3-cachyos, Python 3.12.13 |
 
 ## Modes compared
@@ -34,8 +34,8 @@
 | Mode | Recall@1 | Recall@3 | MRR | Abstention | False abstention | p50 | p95 | mean |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `lexical_baseline` | 85% | 92% | 0.885 | 50% | 8% | 0 ms | 0 ms | 0 ms |
-| `ragflow_hybrid` | 88% | 96% | 0.923 | 100% | 12% | 120 ms | 169 ms | 119 ms |
-| `agentpath_full` | 96% | 100% | 0.981 | 100% | 0% | 138 ms | 196 ms | 143 ms |
+| `ragflow_hybrid` | 88% | 96% | 0.923 | 100% | 12% | 115 ms | 148 ms | 115 ms |
+| `agentpath_full` | 100% | 100% | 1.000 | 100% | 0% | 138 ms | 180 ms | 138 ms |
 
 Recall, MRR and false abstention are over supported queries; abstention accuracy is over unsupported queries.
 

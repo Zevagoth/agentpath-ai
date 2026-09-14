@@ -85,11 +85,26 @@ class PreparedQuery:
     scenario_tags: tuple[str, ...] = ()
     detected_product_line: str | None = None
     requested_product_line: str | None = None
+    #: A procedure id the agent typed, e.g. ``NW-HTL-014``. Set only when the
+    #: query names one, and treated as an exact request rather than as a search
+    #: term - see :meth:`Retriever.retrieve`'s ``procedure_id`` argument.
+    requested_procedure_id: str | None = None
 
     @property
     def effective_product_line(self) -> str | None:
         """An explicit filter from the agent always wins over detection."""
         return self.requested_product_line or self.detected_product_line
+
+    @property
+    def is_procedure_lookup(self) -> bool:
+        """Whether the agent asked for a specific procedure by its id.
+
+        Kept as a property rather than recomputed by callers so "the agent named a
+        procedure" has one definition. It does not require the *whole* query to be
+        an id: ``NW-HTL-014 what about the cost difference`` is still a lookup of
+        that procedure, and narrowing to it is what the agent asked for.
+        """
+        return self.requested_procedure_id is not None
 
     @property
     def is_empty(self) -> bool:

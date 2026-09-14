@@ -43,9 +43,21 @@ class FakeRetriever:
         return RetrievalMode.HYBRID
 
     async def retrieve(
-        self, query: PreparedQuery, *, limit: int, product_line: str | None = None
+        self,
+        query: PreparedQuery,
+        *,
+        limit: int,
+        product_line: str | None = None,
+        procedure_id: str | None = None,
     ) -> RetrievedPassages:
-        self.calls.append({"search_text": query.search_text, "limit": limit, "product_line": product_line})
+        self.calls.append(
+            {
+                "search_text": query.search_text,
+                "limit": limit,
+                "product_line": product_line,
+                "procedure_id": procedure_id,
+            }
+        )
         if self.error:
             raise self.error
         return RetrievedPassages(
@@ -198,9 +210,7 @@ async def test_product_line_filter_is_forwarded() -> None:
 
 
 async def test_limit_is_respected() -> None:
-    retriever = FakeRetriever(
-        passages=tuple(_passage(f"NW-TST-{i:03d}", 0.6 - i / 100, f"c{i}") for i in range(5))
-    )
+    retriever = FakeRetriever(passages=tuple(_passage(f"NW-TST-{i:03d}", 0.6 - i / 100, f"c{i}") for i in range(5)))
     client, manager = await _client(retriever)
     try:
         response = await client.post("/api/search", json={"query": "anything", "limit": 2})

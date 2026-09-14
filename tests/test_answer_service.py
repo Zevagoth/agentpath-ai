@@ -90,7 +90,14 @@ class FakeRetriever:
     def mode(self) -> RetrievalMode:
         return RetrievalMode.HYBRID
 
-    async def retrieve(self, query: PreparedQuery, *, limit: int, product_line: str | None = None) -> RetrievedPassages:
+    async def retrieve(
+        self,
+        query: PreparedQuery,
+        *,
+        limit: int,
+        product_line: str | None = None,
+        procedure_id: str | None = None,
+    ) -> RetrievedPassages:
         return RetrievedPassages(
             passages=self.passages,
             mode=self.mode,

@@ -90,6 +90,7 @@ class RAGFlowRetriever:
         *,
         limit: int,
         product_line: str | None = None,
+        procedure_id: str | None = None,
     ) -> RetrievedPassages:
         if query.is_empty:
             return RetrievedPassages(
@@ -105,7 +106,7 @@ class RAGFlowRetriever:
         # procedure routinely rank next to each other, and aggregation collapses
         # them afterwards.
         page_size = max(self._page_size, limit * 3)
-        metadata_condition = _metadata_condition(product_line)
+        metadata_condition = _metadata_condition(product_line, procedure_id)
 
         started = time.perf_counter()
         try:
@@ -194,21 +195,34 @@ class RAGFlowRetriever:
         )
 
 
-def _metadata_condition(product_line: str | None) -> dict[str, Any] | None:
-    """Build RAGFlow's metadata filter for a product-line restriction.
+def _metadata_condition(product_line: str | None, procedure_id: str | None = None) -> dict[str, Any] | None:
+    """Build RAGFlow's metadata filter from the restrictions the agent stated.
 
-    Applied only when the agent explicitly picks a product line. A filter derived
-    from automatic detection would silently delete the correct procedure from the
-    candidate set whenever detection was wrong.
+    Both inputs are explicit. ``product_line`` comes from the dropdown, and
+    ``procedure_id`` from an id the agent typed. Neither is ever derived from
+    automatic detection: a filter built from a guess would silently delete the
+    correct procedure from the candidate set whenever the guess was wrong, and the
+    agent would have no way to see that it happened.
+
+    A procedure id is filtered rather than scored because it is an identifier, not
+    a phrase. Scoring it as text was measured to put the *wrong* procedure first:
+    the corpus cross-references ids, so a search for ``NW-HTL-014`` matched
+    ``NW-HTL-021``'s "does not apply when" section almost as strongly as the
+    procedure itself - 0.7642 against 0.7624 - and a difference that thin is noise,
+    not ranking. Filtering makes the answer exact and, when the id does not exist,
+    makes the miss honest instead of returning a plausible neighbour.
+
+    Combined with ``and``: an agent who picks a product line *and* names a
+    procedure has stated both, and RAGFlow evaluates the conjunction server-side.
     """
-    if not product_line:
+    conditions: list[dict[str, Any]] = []
+    if product_line:
+        conditions.append({"name": "product_line", "comparison_operator": "=", "value": product_line})
+    if procedure_id:
+        conditions.append({"name": "procedure_id", "comparison_operator": "=", "value": procedure_id})
+    if not conditions:
         return None
-    return {
-        "logic": "and",
-        "conditions": [
-            {"name": "product_line", "comparison_operator": "=", "value": product_line},
-        ],
-    }
+    return {"logic": "and", "conditions": conditions}
 
 
 def _to_passage(chunk: dict[str, Any]) -> Passage:

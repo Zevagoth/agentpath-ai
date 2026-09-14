@@ -300,16 +300,24 @@ authoritative source for a button name.
 
 ## Known limitations, honestly
 
-- **One retrieval regression, caused by the corpus edit.** `agentpath_full` R@1
-  moved 100% → 96% and MRR 1.000 → 0.981 on the 30-query development set. Exactly
-  one query: the bare procedure-id lookup `NW-HTL-014`, which now ranks second
-  behind `NW-HTL-021` (0.7642 against 0.7624 — the two procedures cross-reference
-  each other's ids, so a literal id query is a near-tie between them). R@3 stayed
-  100% and false abstention stayed 0%. The four demo checks are unchanged: English
-  0.6115 and misspelled 0.5950 both rank `NW-HTL-014` first, and the password query
-  abstains. **Not yet fixed.** An exact procedure-id lookup should be deterministic
-  rather than semantic, which is a query-understanding change and belongs in its own
-  commit.
+- **~~One retrieval regression, caused by the corpus edit.~~ Fixed.** The corpus
+  edit briefly moved `agentpath_full` R@1 to 96% and MRR to 0.981 on one query: the
+  bare id lookup `NW-HTL-014` ranked second behind `NW-HTL-021` at 0.7642 against
+  0.7624. The cause was structural rather than incidental — the corpus
+  cross-references procedures by id, so `NW-HTL-021`'s "does not apply when"
+  section contains the string `NW-HTL-014`, and both lexical and semantic scoring
+  read that as evidence about the query. A 0.0018 margin is noise, not ranking.
+
+  A procedure id is now recognised in query understanding and applied as an exact
+  metadata restriction rather than scored as text. `NW-HTL-014` returns that
+  procedure alone at 0.7624 with strong evidence; a nonexistent id abstains instead
+  of returning a plausible neighbour; two ids in one query stay an ordinary
+  comparison, because narrowing to one of them would answer a question nobody
+  asked. Every other query is score-for-score unchanged, and `agentpath_full` is
+  back to R@1 100%, R@3 100%, MRR 1.000, false abstention 0%.
+
+  `ragflow_hybrid` stays at 88% by design: that mode bypasses query understanding,
+  so the benchmark now attributes the gain to the layer that produced it.
 - **The 100% figure was never production accuracy.** It came from five procedures
   and a 30-query set that was also used to fit the evidence thresholds. 96% is not
   meaningfully worse than 100% at this corpus size; both are too small to

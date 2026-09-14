@@ -13,6 +13,8 @@ Retrieval (steps 6 onward) happens behind the ``Retriever`` port.
 
 from __future__ import annotations
 
+import re
+
 from agentpath.domain import Language, PreparedQuery
 from agentpath.query.language import detect_language
 from agentpath.query.lexicon import Lexicon
@@ -21,6 +23,18 @@ from agentpath.query.normalize import normalize, strip_hyphens
 #: Cap on appended expansion terms. Beyond this, extra terms dilute BM25 scoring
 #: more than they help recall.
 MAX_EXPANSION_TERMS = 8
+
+#: A procedure id anywhere in the query, e.g. ``NW-HTL-014``. Case-insensitive
+#: because an agent pasting a reference does not reliably shift-key it.
+#:
+#: This exists because a procedure id is not a search term. Semantic and lexical
+#: retrieval both treat it as one, and on this corpus that fails: procedures
+#: cross-reference each other by id, so ``NW-HTL-021``'s document contains the
+#: string ``NW-HTL-014`` in its "does not apply when" section, and a search for
+#: that id was a near-tie between the two - measured at 0.7642 against 0.7624,
+#: with the wrong procedure winning. An id is an exact request, so it is answered
+#: exactly.
+PROCEDURE_ID_IN_QUERY = re.compile(r"\bNW-[A-Z]{3}-\d{3}\b", re.IGNORECASE)
 
 
 class QueryPreprocessor:
@@ -44,6 +58,9 @@ class QueryPreprocessor:
         original = query.strip()
         language = detect_language(original)
         normalized = normalize(original)
+        # Read from the original text, before normalization, so a normalizer that
+        # folds case or strips punctuation cannot destroy the id on the way past.
+        requested_procedure_id = self._procedure_id(original)
 
         corrected, corrections = self._lexicon.correct(normalized)
         concepts = self._lexicon.match_concepts(corrected)
@@ -70,9 +87,24 @@ class QueryPreprocessor:
             scenario_tags=scenario_tags,
             detected_product_line=detected_product_line,
             requested_product_line=product_line,
+            requested_procedure_id=requested_procedure_id,
         )
 
     # -- internals --------------------------------------------------------- #
+
+    @staticmethod
+    def _procedure_id(original: str) -> str | None:
+        """The procedure id the agent typed, upper-cased, or ``None``.
+
+        Upper-cased because that is how the id is stored in document metadata and
+        the filter compares strings exactly. Only the first is taken: two ids in
+        one query is a comparison question, not a lookup, and narrowing to one of
+        them would answer a question the agent did not ask.
+        """
+        found = PROCEDURE_ID_IN_QUERY.findall(original)
+        if len(found) != 1:
+            return None
+        return found[0].upper()
 
     def _build_expansions(
         self,

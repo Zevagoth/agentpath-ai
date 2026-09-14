@@ -43,8 +43,19 @@ class Retriever(Protocol):
         *,
         limit: int,
         product_line: str | None = None,
+        procedure_id: str | None = None,
     ) -> RetrievedPassages:
         """Return candidate passages, best first.
+
+        ``product_line`` and ``procedure_id`` are *restrictions*, not hints. Both
+        come from something the agent stated explicitly, and an implementation
+        that cannot honour a restriction should return nothing rather than return
+        something wider - silently broadening a filter is how an agent ends up
+        acting on the wrong procedure.
+
+        ``procedure_id`` exists because an id is not a search term. On this corpus
+        procedures cite each other by id, so scoring one as text made the wrong
+        procedure win a lookup for the right one.
 
         Implementations must not raise on "nothing found": an empty result is a
         legitimate answer and drives abstention. They should raise
