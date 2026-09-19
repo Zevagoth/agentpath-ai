@@ -98,6 +98,20 @@ ingest-force: ## Re-upload every document, moving chunk ids to free image keys
 ingest-verify: ## Show ingestion status and chunk counts
 	@uv run agentpath-ingest verify
 
+CORPUS ?= mramg-manual
+
+.PHONY: corpus-fetch
+corpus-fetch: ## Download an external corpus (CORPUS=mramg-manual). Idempotent.
+	@uv run python scripts/corpus.py fetch --corpus $(CORPUS)
+
+.PHONY: corpus-refetch
+corpus-refetch: ## Re-download an external corpus even if it is already present
+	@uv run python scripts/corpus.py fetch --corpus $(CORPUS) --force
+
+.PHONY: corpus-inspect
+corpus-inspect: ## Report counts and integrity for an external corpus
+	@uv run python scripts/corpus.py inspect --corpus $(CORPUS)
+
 .PHONY: screenshots
 screenshots: ## Render the synthetic AgentDesk screens to PNG + sidecar JSON
 	@cd apps/web && node scripts/generate-screenshots.mjs

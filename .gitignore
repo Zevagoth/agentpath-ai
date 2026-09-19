@@ -37,6 +37,12 @@ data/synthetic/screenshots/generated/
 evaluation/reports/*.json
 docs/ENVIRONMENT.json
 
+# --- external corpora -------------------------------------------------------
+# Someone else's data, fetched by `make corpus-fetch`. MRAMG-Manual alone is
+# 147 MiB of images, it is Apache-2.0 licensed to its authors rather than to us,
+# and it is reproducible from the recorded checksums - so it is not committed.
+data/external/
+
 # --- local tooling ----------------------------------------------------------
 .idea/
 .vscode/
