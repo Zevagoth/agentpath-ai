@@ -108,6 +108,10 @@ corpus-fetch: ## Download an external corpus (CORPUS=mramg-manual). Idempotent.
 corpus-refetch: ## Re-download an external corpus even if it is already present
 	@uv run python scripts/corpus.py fetch --corpus $(CORPUS) --force
 
+.PHONY: corpus-export
+corpus-export: ## Write the normalised bundle the API reads for an external corpus
+	@uv run python scripts/corpus.py export --corpus $(CORPUS)
+
 .PHONY: corpus-inspect
 corpus-inspect: ## Report counts and integrity for an external corpus
 	@uv run python scripts/corpus.py inspect --corpus $(CORPUS)

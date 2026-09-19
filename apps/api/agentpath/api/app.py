@@ -35,6 +35,7 @@ from agentpath.api.schemas import (
     SearchResponse,
 )
 from agentpath.config import Settings, get_settings
+from agentpath.corpus import render_document_html
 from agentpath.logging_setup import configure_logging
 from agentpath.retrieval.ports import RetrievalError, RetrievalUnavailable
 from agentpath.screenshots import (
@@ -313,6 +314,132 @@ def create_app(settings: Settings | None = None, context: ServiceContext | None 
             return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
         return Response(content=record.image, media_type=SCREENSHOT_MEDIA_TYPE, headers=headers)
 
+    @app.get(
+        "/api/sources/{source_id}",
+        summary="Open an external corpus document at the cited position",
+        responses={
+            200: {"content": {"text/html": {}}, "description": "The document."},
+            404: {"description": "No such source."},
+        },
+        response_class=Response,
+    )
+    async def source_document(request: Request, source_id: str) -> Response:
+        """Serve a corpus document as its own "original", scrolled to the citation.
+
+        This is what the console's `Open original source` button opens for a corpus
+        that records no upstream document URL - which is MRAMG-Manual, whose images
+        carry URLs but whose documents do not.
+
+        The security model is the screenshot route's, with one deliberate
+        difference. There, the bytes are in memory and the request can only pick
+        from a closed set. Here the document text is in memory too, but the *images
+        referenced by the page* are files, so paths exist somewhere. They are
+        resolved once at startup and checked to sit inside the corpus's own images
+        directory (`agentpath.corpus._image_record`), and the request supplies only
+        an opaque id that must already be a key in that registry. There is no path
+        operation on a request-derived value on this code path.
+
+        `char` and `to` are read from the query string rather than the fragment,
+        because a fragment never reaches the server. The fragment is still what the
+        provenance link carries, so the page also works when opened without them -
+        it just starts at the top and says so.
+        """
+        ctx: ServiceContext = request.app.state.context
+        found = ctx.corpora.source(source_id)
+        if found is None:
+            logger.info(
+                "corpus.source_not_found",
+                requested=source_id[:MAX_LOGGED_ID_LENGTH],
+                known=sum(len(corpus.documents) for corpus in ctx.corpora),
+            )
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": "source_not_found", "message": "No source document under that id."},
+                headers={"X-Content-Type-Options": "nosniff"},
+            )
+
+        corpus, document = found
+        start = _positive_int(request.query_params.get("char"))
+        end = _positive_int(request.query_params.get("to"))
+        if start is not None and end is None:
+            end = start + 1_400
+
+        body = render_document_html(document, corpus, char_start=start, char_end=end)
+        return Response(
+            content=body,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "public, max-age=300, must-revalidate",
+                "X-Content-Type-Options": "nosniff",
+                # The page embeds only images from this origin and runs no script.
+                # Stated in a header as well as in the markup, so a future edit that
+                # adds a script tag stops working rather than quietly executing.
+                "Content-Security-Policy": (
+                    "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; "
+                    "base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+                ),
+                "Referrer-Policy": "no-referrer",
+            },
+        )
+
+    @app.get(
+        "/api/corpus-images/{corpus_id}/{image_id}",
+        summary="Fetch one image from an external corpus",
+        responses={
+            200: {"content": {"image/jpeg": {}}, "description": "The image."},
+            304: {"description": "The client's cached copy is current."},
+            404: {"description": "No such image."},
+        },
+        response_class=Response,
+    )
+    async def corpus_image(request: Request, corpus_id: str, image_id: str) -> Response:
+        """Serve an image by corpus and id.
+
+        Read from disk per request rather than held in memory: MRAMG-Manual is 2,599
+        files and 147 MiB, which is the one place this route differs from
+        `/api/screenshots`. The path is not built from the request - it was resolved
+        and bounds-checked at startup, and the request only selects a key.
+
+        A malformed id, an unknown id and an unknown corpus all return the
+        byte-identical 404, so the route cannot be used to enumerate what exists.
+        """
+        ctx: ServiceContext = request.app.state.context
+        found = ctx.corpora.image(corpus_id, image_id)
+        if found is None:
+            logger.info(
+                "corpus.image_not_found",
+                corpus=corpus_id[:MAX_LOGGED_ID_LENGTH],
+                requested=image_id[:MAX_LOGGED_ID_LENGTH],
+            )
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": "corpus_image_not_found", "message": "No image under that id."},
+                headers={"X-Content-Type-Options": "nosniff"},
+            )
+
+        _corpus, record = found
+        try:
+            payload = record.path.read_bytes()
+        except OSError:
+            # The file was there at startup and is not now. A 404 is the honest
+            # answer; the evaluation's broken-image rate is what measures this.
+            logger.warning("corpus.image_unreadable", image=record.image_id)
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": "corpus_image_not_found", "message": "No image under that id."},
+                headers={"X-Content-Type-Options": "nosniff"},
+            )
+
+        etag = f'"{record.image_id}-{record.byte_size}"'
+        headers = {
+            "ETag": etag,
+            "Cache-Control": "public, max-age=3600, must-revalidate",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if etag in _if_none_match(request.headers.get("if-none-match")):
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+        return Response(content=payload, media_type=record.media_type, headers=headers)
+
     @app.get("/health", response_model=HealthResponse, summary="Dependency health")
     async def health(request: Request, response: Response) -> HealthResponse:
         ctx: ServiceContext = request.app.state.context
@@ -338,6 +465,18 @@ def create_app(settings: Settings | None = None, context: ServiceContext | None 
         )
 
     return app
+
+
+def _positive_int(raw: str | None) -> int | None:
+    """A non-negative integer from a query parameter, or ``None``.
+
+    Total rather than validating: these come from a URL a user can edit, so a
+    nonsense value means "no position given" and the document opens at the top.
+    Bounded so an absurd offset cannot become a large slice operation.
+    """
+    if raw is None or not raw.isdigit() or len(raw) > 9:
+        return None
+    return int(raw)
 
 
 app = create_app()

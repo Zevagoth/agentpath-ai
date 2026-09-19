@@ -24,6 +24,7 @@ from pathlib import Path
 
 from agentpath_ingestion.corpora import CorpusAdapter
 from agentpath_ingestion.corpora.base import IMAGE_PLACEHOLDER
+from agentpath_ingestion.corpora.export import export_bundle
 from agentpath_ingestion.corpora.mramg import CORPUS_ID as MRAMG_ID
 from agentpath_ingestion.corpora.mramg import MramgManualAdapter
 from agentpath_ingestion.corpora.mramg import default_root as mramg_root
@@ -33,6 +34,16 @@ from agentpath_ingestion.dataset import repo_root
 #: have their own pipeline (`make dataset && make ingest`) and are not fetched.
 ADAPTERS: dict[str, Callable[[Path], CorpusAdapter]] = {
     MRAMG_ID: lambda root: MramgManualAdapter(mramg_root(root)),
+}
+
+#: Where each corpus's exported bundle goes, and where its image bytes live. Kept
+#: beside the adapter registry so adding a corpus is one place.
+BUILD_DIRS: dict[str, Callable[[Path], Path]] = {
+    MRAMG_ID: lambda root: mramg_root(root) / "build",
+}
+
+IMAGE_DIRS: dict[str, Callable[[Path], Path]] = {
+    MRAMG_ID: lambda root: mramg_root(root) / "raw" / "images",
 }
 
 
@@ -66,6 +77,30 @@ def command_fetch(adapter: CorpusAdapter, args: argparse.Namespace) -> int:
 
     if report.downloaded_bytes == 0:
         print("\nNothing was downloaded: every artefact was already present and verified.")
+    return 0
+
+
+def command_export(adapter: CorpusAdapter, _args: argparse.Namespace) -> int:
+    """Write the normalised bundle the API reads.
+
+    Separate from ``fetch`` because it needs no network, and separate from the API
+    because the API may not import this package - see
+    ``agentpath_ingestion.corpora.export``.
+    """
+    bundle = adapter.load()
+    build_dir = BUILD_DIRS[bundle.corpus_id](repo_root())
+    images_root = IMAGE_DIRS[bundle.corpus_id](repo_root())
+
+    report = export_bundle(bundle, build_dir, images_root=images_root)
+
+    print(f"corpus    : {report.corpus_id}")
+    print(f"written to: {report.directory}")
+    print(f"documents : {report.documents:,}")
+    print(f"chunks    : {report.chunks:,}")
+    print(f"questions : {report.questions:,}")
+    print(f"images    : {report.images:,} referenced, bytes in {images_root}")
+    print(f"bundle    : {human(report.bytes_written)}")
+    print("\nThe API reads this directory at startup. Restart it to pick up changes.")
     return 0
 
 
@@ -127,8 +162,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "command",
-        choices=("fetch", "inspect"),
-        help="fetch: download the raw artefacts. inspect: report what is on disk.",
+        choices=("fetch", "export", "inspect"),
+        help=(
+            "fetch: download the raw artefacts. export: write the bundle the API "
+            "reads. inspect: report what is on disk."
+        ),
     )
     parser.add_argument(
         "--corpus",
@@ -144,8 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     adapter = ADAPTERS[args.corpus](repo_root())
-    handler = command_fetch if args.command == "fetch" else command_inspect
-    return handler(adapter, args)
+    handlers = {"fetch": command_fetch, "export": command_export, "inspect": command_inspect}
+    return handlers[args.command](adapter, args)
 
 
 if __name__ == "__main__":

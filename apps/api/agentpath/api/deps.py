@@ -13,6 +13,7 @@ import httpx
 import structlog
 
 from agentpath.config import Settings
+from agentpath.corpus import CorpusCatalogue
 from agentpath.domain import DependencyHealth
 from agentpath.generation import AnswerService, OllamaClient, OllamaRuntimeOptions
 from agentpath.procedures import ProcedureCatalogue
@@ -47,6 +48,10 @@ class ServiceContext:
     #: Defaulted for the same reason: a context built for search alone gets a
     #: catalogue in which every citation is unknown, rather than a filesystem read.
     procedures: ProcedureCatalogue = field(default_factory=ProcedureCatalogue.empty)
+    #: External corpora, read from the bundles ``make corpus-export`` writes.
+    #: Defaulted to empty so a deployment with none behaves exactly as before and
+    #: the source routes simply have nothing to serve.
+    corpora: CorpusCatalogue = field(default_factory=CorpusCatalogue.empty)
 
     async def aclose(self) -> None:
         await self.client.aclose()
@@ -193,6 +198,9 @@ def build_context(settings: Settings) -> ServiceContext:
     lexicon = load_lexicon(settings.lexicon_file)
     screenshots = ScreenshotCatalogue.load(settings.screenshots_dir)
     procedures = ProcedureCatalogue.load(settings.procedures_dir)
+    # One filesystem walk at startup, exactly like the two above, so the request
+    # path is dictionary lookups. A corpus with no exported bundle is simply absent.
+    corpora = CorpusCatalogue.load()
     client = RAGFlowClient(
         settings.ragflow_base_url,
         settings.ragflow_api_key.get_secret_value(),
@@ -226,6 +234,7 @@ def build_context(settings: Settings) -> ServiceContext:
         screenshots=len(screenshots),
         procedures=len(procedures),
         procedure_steps=procedures.step_count,
+        external_corpora=list(corpora.ids),
     )
     return ServiceContext(
         settings=settings,
@@ -236,4 +245,5 @@ def build_context(settings: Settings) -> ServiceContext:
         answers=answers,
         screenshots=screenshots,
         procedures=procedures,
+        corpora=corpora,
     )
