@@ -132,6 +132,14 @@ corpus-inspect: ## Report counts and integrity for an external corpus
 corpus-split: ## Write the committed dev / held-out split. Refuses to change an existing one.
 	@uv run python scripts/corpus.py split --corpus $(CORPUS)
 
+.PHONY: corpus-eval
+corpus-eval: ## Retrieval evaluation: three methods, dev and held-out separately (needs the stack)
+	@uv run python scripts/corpus_eval.py --corpus $(CORPUS)
+
+.PHONY: corpus-eval-dev
+corpus-eval-dev: ## Retrieval evaluation on the dev split only
+	@uv run python scripts/corpus_eval.py --corpus $(CORPUS) --splits dev
+
 .PHONY: screenshots
 screenshots: ## Render the synthetic AgentDesk screens to PNG + sidecar JSON
 	@cd apps/web && node scripts/generate-screenshots.mjs

@@ -37,6 +37,7 @@ from agentpath.corpus_retrieval.grouping import group_into_documents
 from agentpath.corpus_retrieval.hybrid import HybridCorpusRetriever
 from agentpath.corpus_retrieval.images import (
     MIN_INFORMATIVE_IDF,
+    MIN_SCORE_RATIO,
     ContextWindowImageSelector,
     DocumentOrderImageSelector,
 )
@@ -629,6 +630,65 @@ def test_both_selectors_satisfy_the_protocol(corpus: Corpus) -> None:
 def test_the_informative_threshold_is_the_idf_of_a_term_in_half_the_corpus() -> None:
     """Not tuned. It is the point at which a term stops distinguishing anything."""
     assert MIN_INFORMATIVE_IDF == pytest.approx(0.6931471805599453)
+
+
+def test_the_relative_floor_drops_images_scoring_far_below_the_best(corpus: Corpus) -> None:
+    """Without it the selection is always exactly ``limit`` images, which caps precision
+    at ``|truth| / limit`` and shows a reader five figures when one is right."""
+    # One term per document, so all three contribute candidates at ranks 1, 2 and 3 and
+    # the reciprocal-rank weighting spreads their scores.
+    documents = _hits_for(corpus, "200", "100", "300")
+    question = "batteries coolant filter"
+
+    unfiltered, loose = ContextWindowImageSelector(corpus, minimum_score_ratio=0.0).select(question, documents, limit=9)
+    filtered, diagnostics = ContextWindowImageSelector(corpus, minimum_score_ratio=0.5).select(
+        question, documents, limit=9
+    )
+
+    assert len(unfiltered) > 1, "the fixture must offer something for the floor to drop"
+    assert len(filtered) < len(unfiltered)
+    assert diagnostics["kept_after_score_floor"] < loose["kept_after_score_floor"]
+    assert diagnostics["minimum_score_ratio"] == 0.5
+    # Everything kept scores at least half the best.
+    best = filtered[0].score
+    assert all(hit.score >= best * 0.5 for hit in filtered)
+
+
+def test_the_relative_floor_keeps_the_best_image(corpus: Corpus) -> None:
+    """A relative floor is measured against the top score, so the top image always
+    passes it. That is why it cannot produce an empty selection."""
+    documents = _hits_for(corpus, "200")
+
+    hits, _ = ContextWindowImageSelector(corpus, minimum_score_ratio=0.99).select(
+        "insert alkaline batteries", documents, limit=5
+    )
+
+    assert hits
+    assert hits[0].rank == 1
+
+
+def test_the_relative_floor_cannot_create_image_abstention(corpus: Corpus) -> None:
+    """The limitation, asserted so it cannot be quietly forgotten.
+
+    Measured on the dev split: the top image's score for questions that want an image
+    (median 1.115) and for questions that want none (median 1.027) are the same
+    distribution, so no absolute floor separates them. A relative floor cannot either,
+    because the top image is at ratio 1.0 by construction. Image abstention on this
+    corpus is not available to a text-only method.
+    """
+    documents = _hits_for(corpus, "200")
+
+    for ratio in (0.0, 0.5, 0.9, 1.0):
+        hits, _ = ContextWindowImageSelector(corpus, minimum_score_ratio=ratio).select(
+            "insert alkaline batteries", documents, limit=5
+        )
+        assert hits, f"ratio {ratio} still returned an image, as it must"
+
+
+def test_the_default_floor_is_the_value_chosen_on_the_dev_split() -> None:
+    """0.5 keeps 89.7% of correct images and drops 47.5% of wrong ones on dev. Held-out
+    had no part in choosing it."""
+    assert MIN_SCORE_RATIO == 0.5
 
 
 # --------------------------------------------------------------------------- #

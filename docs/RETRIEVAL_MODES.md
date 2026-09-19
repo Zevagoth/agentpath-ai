@@ -100,3 +100,81 @@ around it.
 Adding real visual retrieval would mean introducing an image-text embedding model
 and embedding 2,599 images at ingestion time. That is a separate decision with a
 download and a VRAM cost attached, and it is not taken here.
+
+## How well does it work? Measured
+
+The above was written before the evaluation ran. These are the numbers it produced,
+on the held-out half of MRAMG-Manual (194 questions, split seed `20260919`). Full
+report in `evaluation/reports/latest-corpus-retrieval.md`.
+
+Context-window ranking is roughly **nine times** better at finding the right figure
+than taking the document's images in order — and still falls far short of the 80%
+target:
+
+| Images chosen by | Recall@1 | Recall@3 | Recall@5 | Precision |
+| --- | --- | --- | --- | --- |
+| document order (positional) | 0.8% | 2.3% | 4.6% | 2.3% |
+| context window | 9.9% | 30.1% | **40.7%** | 18.7% |
+
+Both rows ran over *identical* document retrieval — the same retriever instance, so
+the difference is image ranking and nothing else. Document Recall@3 for both was
+98.5%.
+
+### Why it stops at ~41%: adjacent figures are textually identical
+
+The limit is not that the right document is missed. Of the 87 held-out questions
+that scored zero image coverage, **74 still returned an image from the correct
+document** — the method found the right place and picked the wrong figure. It is
+often very nearly right: 19% of those misses returned a figure within one position
+of the wanted one, 43% within three.
+
+The cause is measurable. Taking every pair of consecutive figures in the corpus and
+comparing the word sets of their context windows:
+
+```
+consecutive figure pairs                    2,567
+Jaccard overlap of their windows   median 0.70, mean 0.65
+pairs overlapping above 0.5                   71%
+pairs overlapping above 0.8                   37%
+```
+
+A manual that shows ten steps in a row surrounds all ten figures with nearly the
+same words. No amount of better text scoring separates figure 137 from figure 138
+when 70% of their surrounding vocabulary is shared. **This is the ceiling of
+text-only image retrieval on this corpus, and clearing it requires a model that
+reads the picture.**
+
+### And it cannot decline to show an image
+
+40 of the 390 questions expect no image at all; their authored answers contain no
+`<PIC>`. The system returns images for every one of them, so image abstention
+accuracy is **0%**.
+
+That is not an oversight, it is a measured impossibility for this method. On the dev
+split, the top image's score for questions that want an image and for questions that
+want none are the same distribution:
+
+```
+top image score, questions wanting images   n=176  median 1.115  range 0.218–2.856
+top image score, questions wanting none     n= 20  median 1.027  range 0.253–2.843
+```
+
+The ranges overlap over almost their entire extent. A floor at 1.0 would silence
+42.6% of the questions that *need* an image in order to correctly silence 45% of
+those that do not; at 2.0 it damages the first population more than it helps the
+second. So no absolute score threshold was added, and the 0% is reported as 0%
+rather than approximated by a coin toss.
+
+A *relative* floor was added — an image must score at least half the best image's
+score to be shown — because that trade is genuinely favourable: on dev it keeps
+89.7% of correct images while dropping 47.5% of wrong ones. It raised held-out
+precision from 17.1% to 18.7% and left recall unchanged. It cannot produce
+abstention, because the best image is at ratio 1.0 by construction.
+
+### Summary
+
+The honest answer to "does the system search inside image content?" is still **no**,
+and the evaluation now says what that costs: excellent document retrieval (98.5%
+Recall@3), usable-but-weak figure selection (40.7% Recall@5), and no ability to
+withhold a figure. The first is architecture working on an external corpus. The
+second and third are the boundary of text.

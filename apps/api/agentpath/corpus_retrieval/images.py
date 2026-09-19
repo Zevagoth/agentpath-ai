@@ -52,6 +52,45 @@ MIN_INFORMATIVE_IDF = math.log(2.0)
 #: reason and becomes a word list.
 MAX_REASON_TERMS = 6
 
+#: An image must score at least this fraction of the best-scoring image's score to be
+#: returned. Relative, not absolute, because the score has no calibrated scale: it is a
+#: sum of idf weights divided by a window length, and what "high" means depends on the
+#: question's vocabulary.
+#:
+#: **Chosen on the dev split, never on held-out.** Over the 196 dev questions, scoring
+#: every candidate image and comparing each to its question's top scorer:
+#:
+#: ===== ======================== =====================
+#: ratio correct images kept      wrong images kept
+#: ===== ======================== =====================
+#: 0.00  272/272 (100%)           3572/3572 (100%)
+#: 0.50  244/272 (89.7%)          1875/3572 (52.5%)
+#: 0.70  195/272 (71.7%)          1005/3572 (28.1%)
+#: 0.90  120/272 (44.1%)           423/3572 (11.8%)
+#: ===== ======================== =====================
+#:
+#: 0.5 is where the trade is clearly favourable: it discards nearly half the wrong
+#: images for a tenth of the right ones. Past 0.7 it starts costing more correct images
+#: than it saves wrong ones. It buys precision and costs a little recall, and it is the
+#: reason a one-image question no longer receives five figures.
+MIN_SCORE_RATIO = 0.5
+
+#: Deliberately absent: an **absolute** floor, which is the only thing that could let
+#: this selector return no image at all.
+#:
+#: Measured on dev and rejected. The top image's score for the 176 questions that want
+#: images (median 1.115, range 0.218-2.856) and for the 20 that want none (median 1.027,
+#: range 0.253-2.843) are the same distribution; the ranges overlap over almost their
+#: entire extent. A floor at 1.0 would silence 42.6% of the questions that need an image
+#: in order to correctly silence 45% of those that do not, and at 2.0 it hurts the first
+#: population more than it helps the second.
+#:
+#: So the context-window score carries **no information** about whether an image is
+#: wanted, only about which image. Image abstention on this corpus is therefore not
+#: available to a text-only method, and the evaluation reports it as 0% rather than
+#: approximating it with a threshold that is a coin toss. Getting it would take a model
+#: that reads the picture.
+
 
 #: Documents deep into the ranking contribute images at a discount, so an image from
 #: the winning document outranks an equally-worded image from the third-place one.
@@ -146,13 +185,25 @@ class ContextWindowImageSelector:
     Candidates come from the passages that actually matched, not from the whole
     document. On a corpus with 54 images per document, widening to the document would
     let the ranking pick an image from a section the question never touched.
+
+    A relative score floor keeps the selection from always being exactly ``limit``
+    images. See :data:`MIN_SCORE_RATIO` for the evidence behind its value, and for the
+    measurement that ruled out an *absolute* floor - and with it, any ability to return
+    no image at all.
     """
 
     strategy = "context-window"
 
-    def __init__(self, corpus: Corpus, *, minimum_score: float = 0.0) -> None:
+    def __init__(
+        self,
+        corpus: Corpus,
+        *,
+        minimum_score: float = 0.0,
+        minimum_score_ratio: float = MIN_SCORE_RATIO,
+    ) -> None:
         self._corpus = corpus
         self._minimum_score = minimum_score
+        self._minimum_score_ratio = minimum_score_ratio
         # Built once per corpus, at startup: the idf of a window term is a property
         # of the corpus, and computing it per request would mean tokenising 2,599
         # windows inside every search.
@@ -216,6 +267,16 @@ class ContextWindowImageSelector:
             scored.append((score, image_id, document_id, ranked_terms))
 
         scored.sort(key=lambda row: (-row[0], row[1]))
+
+        # The relative floor, applied after ranking because it is defined against the
+        # best score. It can never empty the selection - the top image is always at
+        # ratio 1.0 - which is exactly the limitation recorded at MIN_SCORE_RATIO.
+        before_floor = len(scored)
+        if scored and self._minimum_score_ratio > 0:
+            best = scored[0][0]
+            floor = best * self._minimum_score_ratio
+            scored = [row for row in scored if row[0] >= floor]
+
         hits = tuple(
             ImageHit(
                 image_id=image_id,
@@ -237,7 +298,9 @@ class ContextWindowImageSelector:
             "strategy": self.strategy,
             "reads": "document text around the <PIC> marker; captions are empty in this corpus",
             "candidates": len(candidates),
-            "scored": len(scored),
+            "scored": before_floor,
+            "kept_after_score_floor": len(scored),
+            "minimum_score_ratio": self._minimum_score_ratio,
             "images_selected": len(hits),
             "query_terms": len(query_terms),
             "informative_terms": sorted(informative),
@@ -252,6 +315,7 @@ __all__ = [
     "EVIDENCE_CHARS",
     "MAX_REASON_TERMS",
     "MIN_INFORMATIVE_IDF",
+    "MIN_SCORE_RATIO",
     "ContextWindowImageSelector",
     "DocumentOrderImageSelector",
 ]
