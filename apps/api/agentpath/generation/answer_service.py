@@ -464,7 +464,7 @@ class AnswerService:
         # Step ordering and step dependencies are enforced here, after validation
         # and before the response is built, so no answer can present a step whose
         # declared prerequisite is absent.
-        steps, inserted = self._with_prerequisites(steps, evidence=evidence, language=answer_language)
+        steps, inserted = self._with_prerequisites(steps, language=answer_language)
 
         needs_clarification = result.evidence is EvidenceLevel.PARTIAL or bool(result.conflicts)
         questions: tuple[str, ...] = ()
@@ -505,7 +505,7 @@ class AnswerService:
                 summary=draft.summary.strip(),
                 steps=steps,
                 conditions=_conditions(evidence),
-                escalation=(draft.escalation or "").strip() or None,
+                escalation=_usable_escalation(draft.escalation),
                 customer_wording=draft.customer_wording.strip(),
                 clarifying_questions=questions,
                 conflicts=result.conflicts,
@@ -569,7 +569,16 @@ class AnswerService:
                     control_name=block.control_name,
                     screenshot_id=block.screenshot_id,
                     screenshot_url=self._screenshot_url(block.screenshot_id),
-                    conditions=block.conditions,
+                    # From the catalogue record, not the evidence block. The block
+                    # deliberately carries the *procedure's* scope rules on its
+                    # earliest step so the model reads them once; attaching those to
+                    # a step in the response made the first step of every answer
+                    # recite eleven `applies_when` lines that the response already
+                    # reports at procedure level. The record holds only the decision
+                    # branches that route into this step, which is what "conditions
+                    # on this step" should mean. Nothing is lost: `conditions` on the
+                    # response still carries the gate rules.
+                    conditions=record.conditions if record is not None else block.conditions,
                     source=StepSource.MODEL,
                     requires=record.requires if record is not None else (),
                     step_order=block.step_order,
@@ -581,7 +590,6 @@ class AnswerService:
         self,
         steps: tuple[AnswerStep, ...],
         *,
-        evidence: AssembledEvidence,
         language: Language,
     ) -> tuple[tuple[AnswerStep, ...], tuple[str, ...]]:
         """Add every step the cited steps depend on, then put them in procedure order.
@@ -622,7 +630,7 @@ class AnswerService:
             for required in record.dependency_closure(cited):
                 if (procedure_id, required.citation) in present:
                     continue
-                additions.append(self._prerequisite_step(required, evidence=evidence, language=language))
+                additions.append(self._prerequisite_step(required, language=language))
 
         if not additions:
             return tuple(sorted(steps, key=self._presentation_key(by_procedure))), ()
@@ -642,20 +650,14 @@ class AnswerService:
         self,
         step: StepRecord,
         *,
-        evidence: AssembledEvidence,
         language: Language,
     ) -> AnswerStep:
         """Build one server-inserted step from the corpus.
 
-        The evidence block is preferred when the step has one, so an inserted step
-        is indistinguishable from one the model could have cited - the block adds
-        the procedure's gate conditions to its earliest step, and rebuilding from
-        the catalogue alone would silently lose them. When the step was never
-        offered as evidence, the catalogue record is the source; a dependency is a
-        fact about the procedure, not about what retrieval happened to return.
+        Read from the catalogue rather than from the evidence, because a dependency
+        is a fact about the procedure and not about what retrieval happened to
+        return - the step may never have been offered as evidence at all.
         """
-        block = evidence.block(step.citation)
-        conditions = block.conditions if block is not None else step.conditions
         instruction = step.instruction
         if language is Language.ARABIC and step.instruction_ar:
             instruction = step.instruction_ar
@@ -668,7 +670,7 @@ class AnswerService:
             control_name=step.control_name,
             screenshot_id=step.screenshot_id,
             screenshot_url=self._screenshot_url(step.screenshot_id),
-            conditions=conditions,
+            conditions=step.conditions,
             source=StepSource.PREREQUISITE,
             requires=step.requires,
             step_order=step.step_order,
@@ -761,6 +763,53 @@ def _requirements(evidence: AssembledEvidence) -> tuple[str, ...]:
     is a property of the procedure and not a guess about the conversation.
     """
     return tuple(dict.fromkeys(item for record in evidence.procedures for item in record.required_information))
+
+
+#: The shortest thing that could be an escalation instruction. "Escalate now." is
+#: 13 characters; a one-word non-answer is never more than a handful.
+MIN_ESCALATION_CHARS = 12
+
+#: Ways the model says "not applicable" when asked for an escalation route, in both
+#: languages. Compared after stripping and lowercasing.
+ESCALATION_NON_ANSWERS = frozenset(
+    {
+        "no",
+        "none",
+        "n/a",
+        "na",
+        "not applicable",
+        "not needed",
+        "لا",
+        "لا يوجد",
+        "غير مطلوب",
+        "لا حاجة",
+    }
+)
+
+
+def _usable_escalation(text: str | None) -> str | None:
+    """The model's escalation route, or ``None`` when it did not give one.
+
+    ``escalation`` is optional in the contract, and the model sometimes treats the
+    field as a yes/no question rather than a request for a route. Measured on the
+    Arabic relocation case, it returned exactly ``"لا"`` - "no". Rendering that
+    under a heading like "if this needs escalating" presents a non-answer as
+    guidance, which is worse than showing nothing: an agent who reads it learns
+    that the section is noise.
+
+    So a reply too short to be an instruction, or one that is a plain negation, is
+    treated as absent. Deliberately narrow - it cannot discard a real route, since
+    naming a queue or a team takes more than a few characters - and it changes only
+    whether the section appears, never its wording.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    if stripped.strip(".!؟?").lower() in ESCALATION_NON_ANSWERS:
+        return None
+    if len(stripped) < MIN_ESCALATION_CHARS:
+        return None
+    return stripped
 
 
 def _failure_detail(exc: OllamaError) -> str:

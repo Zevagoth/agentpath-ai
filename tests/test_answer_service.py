@@ -1154,3 +1154,116 @@ def test_build_prompt_interpolates_nothing_but_catalogue_data(
     assert [message["role"] for message in messages] == ["system", "user"]
     assert "what now?" in messages[1]["content"]
     assert "NW-HTL-014#S07" in messages[1]["content"]
+
+
+# --------------------------------------------------------------------------- #
+# A step carries its own conditions, not the procedure's
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_step_carries_only_the_branches_that_route_into_it(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """The procedure's scope rules are not conditions *on a step*.
+
+    The evidence deliberately hangs the procedure's ``applies_when`` and
+    ``does_not_apply_when`` lines on its earliest block, so the model reads them
+    once. Copying those onto the answer's first step made every answer open with
+    eleven lines of scope rules that the response already reports at procedure
+    level - and it was visible in the console as a wall of text under step 1.
+    """
+    client = FakeOllama(reply=_reply("NW-HTL-014#S01", "NW-HTL-014#S02", "NW-HTL-014#S03"))
+    service = _service(
+        passages=(_passage("9ef6da5a9c8a76b2", real_chunks["9ef6da5a9c8a76b2"], score=0.70),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+
+    for step in result.steps:
+        for condition in step.conditions:
+            assert not condition.startswith("applies_when:"), step.step_id
+            assert not condition.startswith("does_not_apply_when:"), step.step_id
+
+    # Nothing was lost: the procedure-level rules are still reported, once.
+    assert any(condition.startswith("applies_when:") for condition in result.conditions)
+    assert any(condition.startswith("does_not_apply_when:") for condition in result.conditions)
+
+
+async def test_a_step_still_shows_a_branch_that_targets_it(
+    catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """Step 10 is the target of a decision branch, and keeps it."""
+    client = FakeOllama(reply=_reply("NW-HTL-014#S10"))
+    service = _service(
+        passages=(_passage("612d73b5b5d68512", real_chunks["612d73b5b5d68512"], score=0.70),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+    escalation = next(step for step in result.steps if step.step_id == "NW-HTL-014#S10")
+
+    assert escalation.conditions
+    assert all(condition.startswith("decision_branch:") for condition in escalation.conditions)
+    assert any("continue at step 10" in condition for condition in escalation.conditions)
+
+
+# --------------------------------------------------------------------------- #
+# An escalation the model did not really give
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # Measured: the Arabic relocation case returned exactly this.
+        "لا",
+        "no",
+        "None",
+        "N/A",
+        "not applicable",
+        "   ",
+        "",
+    ],
+)
+async def test_a_non_answer_escalation_is_treated_as_absent(
+    reply: str, catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """A one-word negation under "if this needs escalating" is noise, not guidance."""
+    client = FakeOllama(reply=_reply("NW-HTL-014#S07", escalation=reply))
+    service = _service(
+        passages=(_passage(TRUNCATED_CHUNK_ID, real_chunks[TRUNCATED_CHUNK_ID], score=0.70),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+
+    assert result.escalation is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Escalate to Accommodation Support if no equivalent option is confirmed.",
+        "ارفع الحالة إلى فريق دعم الإقامة إذا لم يتوفر بديل.",
+        # Short, but still a real instruction.
+        "Escalate now.",
+    ],
+)
+async def test_a_real_escalation_route_is_kept_verbatim(
+    reply: str, catalogue: ProcedureCatalogue, real_chunks: dict[str, str]
+) -> None:
+    """The filter must not be able to discard a route the model did give."""
+    client = FakeOllama(reply=_reply("NW-HTL-014#S07", escalation=reply))
+    service = _service(
+        passages=(_passage(TRUNCATED_CHUNK_ID, real_chunks[TRUNCATED_CHUNK_ID], score=0.70),),
+        client=client,
+        catalogue=catalogue,
+    )
+
+    result = await service.answer(WALKED_GUEST_QUESTION)
+
+    assert result.escalation == reply
