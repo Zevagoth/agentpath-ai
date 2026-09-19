@@ -1,5 +1,5 @@
-import { SearchConsole } from "@/components/SearchConsole";
+import { AgentConsole } from "@/components/AgentConsole";
 
 export default function Page() {
-  return <SearchConsole />;
+  return <AgentConsole />;
 }

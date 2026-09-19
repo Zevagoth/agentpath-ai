@@ -1,14 +1,14 @@
-import { directionFor } from "@/lib/direction";
 import type { ProcedureCard } from "@/lib/types";
+
+import { HighlightedSnippet } from "./HighlightedSnippet";
 
 /**
  * One retrieved procedure with its citations.
  *
  * The citations are not an optional detail: an agent has to be able to read the
  * source text that caused this procedure to surface, in the source's own
- * direction, before acting on it. Snippets carry the engine's `<em>` highlights,
- * inserted as HTML - safe here because the content is our own synthetic corpus and
- * the markup comes from RAGFlow's highlighter, not from user input.
+ * direction, before acting on it. The engine's `<em>` highlights are parsed into
+ * React nodes rather than injected as HTML - see `lib/highlight.ts`.
  */
 
 export function ProcedureCardView({ procedure }: { procedure: ProcedureCard }) {
@@ -52,12 +52,7 @@ export function ProcedureCardView({ procedure }: { procedure: ProcedureCard }) {
           <p className="citations-title">Source passages</p>
           {procedure.citations.slice(0, 2).map((citation) => (
             <div key={citation.chunk_id} className="citation">
-              <p
-                className="citation-text"
-                dir={directionFor(citation.snippet)}
-                // eslint-disable-next-line react/no-danger
-                dangerouslySetInnerHTML={{ __html: clampSnippet(citation.snippet) }}
-              />
+              <HighlightedSnippet className="citation-text" snippet={citation.snippet} />
               <p className="citation-scores">
                 score {citation.score.toFixed(3)}
                 {citation.lexical_score !== null && ` · term ${citation.lexical_score.toFixed(3)}`}
@@ -71,12 +66,3 @@ export function ProcedureCardView({ procedure }: { procedure: ProcedureCard }) {
   );
 }
 
-/** Keep a snippet readable without cutting an `<em>` tag in half. */
-function clampSnippet(snippet: string, maxLength = 420): string {
-  if (snippet.length <= maxLength) return snippet;
-  const clipped = snippet.slice(0, maxLength);
-  const lastOpen = clipped.lastIndexOf("<em>");
-  const lastClose = clipped.lastIndexOf("</em>");
-  const safe = lastOpen > lastClose ? clipped.slice(0, lastOpen) : clipped;
-  return `${safe.trimEnd()}…`;
-}

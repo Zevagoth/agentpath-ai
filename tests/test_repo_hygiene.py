@@ -187,8 +187,37 @@ def test_api_module_referenced_by_makefile_imports() -> None:
 
 def test_web_app_entry_points_exist() -> None:
     web = REPO_ROOT / "apps" / "web"
-    for path in ("package.json", "app/page.tsx", "app/layout.tsx", "components/SearchConsole.tsx"):
+    for path in (
+        "package.json",
+        "app/page.tsx",
+        "app/layout.tsx",
+        # The console absorbed the former SearchConsole as its search mode, so
+        # there is one component with the case form rather than two.
+        "components/AgentConsole.tsx",
+        "components/AnswerView.tsx",
+    ):
         assert (web / path).is_file(), path
+
+
+def test_the_web_app_never_injects_html() -> None:
+    """No `dangerouslySetInnerHTML` anywhere in the console.
+
+    RAGFlow returns matched terms wrapped in `<em>`, and that markup used to be
+    handed to the DOM directly. The snippet is assembled from *indexed document
+    content*, which is the category this system treats as untrusted everywhere
+    else - T8 rebuilds every generated step from the committed YAML precisely so
+    that text from the index cannot reach the model. `lib/highlight.ts` parses the
+    markup into React text nodes instead, and this keeps the sink from coming back.
+    """
+    components = (REPO_ROOT / "apps" / "web").rglob("*.tsx")
+    offenders = [
+        path.relative_to(REPO_ROOT)
+        for path in components
+        if "node_modules" not in path.parts
+        and ".next" not in path.parts
+        and "dangerouslySetInnerHTML" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], offenders
 
 
 # --------------------------------------------------------------------------- #

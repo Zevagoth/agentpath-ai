@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { SearchConsole } from "@/components/SearchConsole";
+import { AgentConsole } from "@/components/AgentConsole";
 
 /**
  * The demo, asserted end to end against the running stack.
@@ -37,7 +37,7 @@ beforeAll(async () => {
 });
 
 async function submit(query: string) {
-  render(<SearchConsole />);
+  render(<AgentConsole initialMode="search" />);
   const input = screen.getByTestId("case-input");
   await userEvent.click(input);
   await userEvent.paste(query);
@@ -100,7 +100,7 @@ describe("live search against the running stack", () => {
 
   it("product line filter narrows to the refunds procedure", async () => {
     if (!apiReachable) return;
-    render(<SearchConsole />);
+    render(<AgentConsole initialMode="search" />);
     await userEvent.click(screen.getByTestId("case-input"));
     await userEvent.paste("refund has not arrived");
     await userEvent.selectOptions(screen.getByTestId("product-line"), "refunds");

@@ -10,6 +10,13 @@ export default defineConfig({
     globals: true,
     include: ["tests/unit/**/*.test.{ts,tsx}"],
     setupFiles: ["tests/unit/setup.ts"],
+    // jsdom only provides `localStorage` for a real origin. Without a URL the
+    // document has an opaque origin, `window.localStorage` is undefined, and the
+    // feedback store silently degrades to its no-storage path - which is correct
+    // behaviour but means the persistence it is supposed to have goes untested.
+    environmentOptions: {
+      jsdom: { url: "http://127.0.0.1:3000/" },
+    },
   },
   resolve: {
     alias: {

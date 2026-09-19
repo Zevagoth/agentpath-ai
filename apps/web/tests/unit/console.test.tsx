@@ -2,8 +2,17 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SearchConsole } from "@/components/SearchConsole";
+import { AgentConsole } from "@/components/AgentConsole";
 import type { SearchResponse } from "@/lib/types";
+
+/**
+ * These cover the search mode, which is now one of two modes on the console. The
+ * assertions are unchanged; they are pinned to search explicitly because the
+ * console opens on the answer mode, which is what an agent mid-call needs.
+ */
+function renderSearchMode() {
+  return render(<AgentConsole initialMode="search" />);
+}
 
 function response(overrides: Partial<SearchResponse> = {}): SearchResponse {
   return {
@@ -69,7 +78,7 @@ afterEach(() => {
 
 describe("search console", () => {
   it("renders the case field, product filter and branding", () => {
-    render(<SearchConsole />);
+    renderSearchMode();
     expect(screen.getByLabelText(/describe the customer's case/i)).toBeTruthy();
     expect(screen.getByTestId("product-line")).toBeTruthy();
     expect(screen.getByText("AgentPath AI")).toBeTruthy();
@@ -77,7 +86,7 @@ describe("search console", () => {
   });
 
   it("disables search until the agent types something", async () => {
-    render(<SearchConsole />);
+    renderSearchMode();
     const button = screen.getByTestId("search-button") as HTMLButtonElement;
     expect(button.disabled).toBe(true);
 
@@ -86,7 +95,7 @@ describe("search console", () => {
   });
 
   it("flips the case field to right-to-left for Arabic input", async () => {
-    render(<SearchConsole />);
+    renderSearchMode();
     const input = screen.getByTestId("case-input");
     await userEvent.type(input, "الفندق ما عنده غرف");
     expect(input.getAttribute("dir")).toBe("rtl");
@@ -94,7 +103,7 @@ describe("search console", () => {
 
   it("shows ranked procedures with citations and timing", async () => {
     stubFetch(response());
-    render(<SearchConsole />);
+    renderSearchMode();
 
     await userEvent.type(screen.getByTestId("case-input"), "hotel has no room");
     await userEvent.click(screen.getByTestId("search-button"));
@@ -108,7 +117,7 @@ describe("search console", () => {
 
   it("shows the corrections and expansions it applied", async () => {
     stubFetch(response());
-    render(<SearchConsole />);
+    renderSearchMode();
 
     await userEvent.type(screen.getByTestId("case-input"), "overboking at the hotle");
     await userEvent.click(screen.getByTestId("search-button"));
@@ -130,7 +139,7 @@ describe("search console", () => {
         procedures: [],
       }),
     );
-    render(<SearchConsole />);
+    renderSearchMode();
 
     await userEvent.type(screen.getByTestId("case-input"), "how do I reset my password");
     await userEvent.click(screen.getByTestId("search-button"));
@@ -145,7 +154,7 @@ describe("search console", () => {
 
   it("renders an engine outage as an error, distinct from abstention", async () => {
     stubFetch({ detail: "connection refused" }, 503);
-    render(<SearchConsole />);
+    renderSearchMode();
 
     await userEvent.type(screen.getByTestId("case-input"), "hotel has no room");
     await userEvent.click(screen.getByTestId("search-button"));
@@ -163,7 +172,7 @@ describe("search console", () => {
         conflicts: ["NW-HTL-014 (v2.1) and NW-HTL-021 (v1.4) both cover: overbooking."],
       }),
     );
-    render(<SearchConsole />);
+    renderSearchMode();
 
     await userEvent.type(screen.getByTestId("case-input"), "hotel problem");
     await userEvent.click(screen.getByTestId("search-button"));

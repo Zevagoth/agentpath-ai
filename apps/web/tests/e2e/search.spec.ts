@@ -20,8 +20,18 @@ test.beforeAll(async ({ request }) => {
   );
 });
 
-test("Arabic case finds the English procedure first", async ({ page }) => {
+/**
+ * The console opens on the answer mode, so these search specs select the search
+ * tab first. Going through the real control rather than a prop keeps the toggle
+ * itself covered by a browser test.
+ */
+async function openSearchMode(page: import("@playwright/test").Page) {
   await page.goto("/");
+  await page.getByTestId("mode-search").click();
+}
+
+test("Arabic case finds the English procedure first", async ({ page }) => {
+  await openSearchMode(page);
   await page.getByTestId("case-input").fill("الفندق ما عنده غرف والضيف واصل");
   await page.getByTestId("search-button").click();
 
@@ -38,7 +48,7 @@ test("Arabic case finds the English procedure first", async ({ page }) => {
 });
 
 test("misspelled case is corrected and still finds the procedure", async ({ page }) => {
-  await page.goto("/");
+  await openSearchMode(page);
   await page.getByTestId("case-input").fill("overboking at the hotle");
   await page.getByTestId("search-button").click();
 
@@ -52,7 +62,7 @@ test("misspelled case is corrected and still finds the procedure", async ({ page
 });
 
 test("unanswerable question abstains instead of inventing a procedure", async ({ page }) => {
-  await page.goto("/");
+  await openSearchMode(page);
   await page.getByTestId("case-input").fill("how do I reset my email password");
   await page.getByTestId("search-button").click();
 
@@ -68,7 +78,7 @@ test("unanswerable question abstains instead of inventing a procedure", async ({
 });
 
 test("product line filter is available and search still returns results", async ({ page }) => {
-  await page.goto("/");
+  await openSearchMode(page);
   await page.getByTestId("case-input").fill("refund has not arrived");
   await page.getByTestId("product-line").selectOption("refunds");
   await page.getByTestId("search-button").click();
@@ -79,7 +89,7 @@ test("product line filter is available and search still returns results", async 
 });
 
 test("response time is displayed to the agent", async ({ page }) => {
-  await page.goto("/");
+  await openSearchMode(page);
   await page.getByTestId("case-input").fill("hotel has no room for the guest");
   await page.getByTestId("search-button").click();
 

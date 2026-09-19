@@ -84,8 +84,8 @@ RAGFlow API 9380, embedder 7998, reranker 7997.
 
 `POST /api/search` finds procedures. It never loads a model, so it stays fast.
 
-`POST /api/answer` writes a grounded answer over the same retrieval. The console
-does not use it yet; drive it directly:
+`POST /api/answer` writes a grounded answer over the same retrieval. This is what
+the console opens on; to drive it directly:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/api/answer \
@@ -117,8 +117,33 @@ curl -sS -X POST http://127.0.0.1:8000/api/answer \
                         "supplier_status": "cannot_accommodate", "customer_arrived": true}}'
 ```
 
-`context_used` in the response shows exactly what each field did and what
-information is still missing.
+`context_used` in the response shows exactly what each field did, what information
+is still missing, and — in `not_collected` — what the procedure requires that this
+system refuses to ask for, with the reason. A booking reference is required by
+`NW-HTL-014` and rejected by the contract, so the assistant never asks for it.
+
+## The console
+
+`make web`, then describe a case. It opens on **Answer the case**, which calls
+`POST /api/answer` and shows:
+
+- the answer for the case, and the ordered steps
+- every step's procedure id, version, citation token and source section
+- the screenshot for a step, beside that step, click to enlarge
+- steps the server inserted to satisfy a declared dependency, labelled as such
+- the synthetic case facts, and what each one actually changed
+- at most one clarifying question, when the case is underdetermined
+- search time and generation time, separately
+- Helpful / Not helpful, stored in this browser and without the case text
+- Arabic right-to-left and English left-to-right, decided per field by its content
+
+**Find procedures** is the same form against `POST /api/search`: ranked procedures
+with their source passages, no model, a couple of hundred milliseconds — and it
+still works when generation is down.
+
+Three absent-answer states are rendered as three different things, because they
+have three different remedies: the knowledge base has no answer, the model server
+failed, or the API could not be reached at all.
 
 ## Testing
 
@@ -156,8 +181,8 @@ Unset, the behaviour is unchanged: the downloaded build is used, and
 ## How it works
 
 ```
-apps/web            Next.js console: case input, product filter, RTL/LTR,
-                    evidence badge, citations, timings
+apps/web            Next.js console: answer card, ordered cited steps with the
+                    screenshot beside each one, case facts, RTL/LTR, timings
 apps/api            FastAPI: query understanding -> Retriever port -> aggregation
                     -> evidence grading -> abstention
 services/ingestion  Renders the synthetic procedures and ingests them into RAGFlow
