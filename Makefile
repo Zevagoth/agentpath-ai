@@ -128,6 +128,10 @@ corpus-drop: ## Remove one external corpus from RAGFlow, leaving others untouche
 corpus-inspect: ## Report counts and integrity for an external corpus
 	@uv run python scripts/corpus.py inspect --corpus $(CORPUS)
 
+.PHONY: corpus-split
+corpus-split: ## Write the committed dev / held-out split. Refuses to change an existing one.
+	@uv run python scripts/corpus.py split --corpus $(CORPUS)
+
 .PHONY: screenshots
 screenshots: ## Render the synthetic AgentDesk screens to PNG + sidecar JSON
 	@cd apps/web && node scripts/generate-screenshots.mjs

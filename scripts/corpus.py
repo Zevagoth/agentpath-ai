@@ -22,6 +22,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from agentpath_eval.corpus_split import load_split, make_split, split_path, write_split
 from agentpath_ingestion.corpora import CorpusAdapter
 from agentpath_ingestion.corpora.base import IMAGE_PLACEHOLDER
 from agentpath_ingestion.corpora.export import export_bundle
@@ -216,14 +217,62 @@ def command_inspect(adapter: CorpusAdapter, _args: argparse.Namespace) -> int:
     return 0
 
 
+def command_split(adapter: CorpusAdapter, args: argparse.Namespace) -> int:
+    """Compute the dev / held-out split and write it into version control.
+
+    Run once. Re-running must reproduce the same file byte for byte, and this refuses
+    to overwrite a different one without ``--force``, because a silently changed split
+    would invalidate every number already reported against it.
+    """
+    bundle = adapter.load()
+    split = make_split(bundle.questions, corpus_id=bundle.corpus_id)
+    target = split_path(bundle.corpus_id)
+
+    if target.exists() and not args.force:
+        existing = load_split(target)
+        if existing.dev == split.dev and existing.held_out == split.held_out:
+            print(f"split unchanged: {target}")
+        else:
+            print(f"REFUSED: {target} exists and differs from the computed split.", file=sys.stderr)
+            print("Every number already reported against it would become incomparable.", file=sys.stderr)
+            print("Re-run with --force only if that is genuinely intended.", file=sys.stderr)
+            return 1
+    else:
+        write_split(split, target)
+        print(f"written : {target}")
+
+    print(f"corpus  : {split.corpus_id}")
+    print(f"seed    : {split.seed}")
+    print(f"fraction: {split.held_out_fraction} held out")
+    print(f"total   : {split.total:,}  dev {len(split.dev):,}  held-out {len(split.held_out):,}")
+    print()
+    print(f"{'stratum':<16} {'dev':>6} {'held-out':>9}")
+    for stratum, (dev_count, held_count) in sorted(split.strata.items()):
+        print(f"{stratum:<16} {dev_count:>6} {held_count:>9}")
+
+    overlap = set(split.dev) & set(split.held_out)
+    if overlap:
+        print(f"\nBROKEN: {len(overlap)} question(s) on both sides", file=sys.stderr)
+        return 1
+    if split.total != len(bundle.questions):
+        print(
+            f"\nBROKEN: split covers {split.total} of {len(bundle.questions)} questions",
+            file=sys.stderr,
+        )
+        return 1
+    print("\nevery question is on exactly one side")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "command",
-        choices=("fetch", "export", "ingest", "inspect"),
+        choices=("fetch", "export", "ingest", "inspect", "split"),
         help=(
             "fetch: download the raw artefacts. export: write the bundle the API "
-            "reads. ingest: index into RAGFlow. inspect: report what is on disk."
+            "reads. ingest: index into RAGFlow. inspect: report what is on disk. "
+            "split: write the committed dev / held-out split."
         ),
     )
     parser.add_argument(
@@ -250,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
         "export": command_export,
         "ingest": command_ingest,
         "inspect": command_inspect,
+        "split": command_split,
     }
     return handlers[args.command](adapter, args)
 
