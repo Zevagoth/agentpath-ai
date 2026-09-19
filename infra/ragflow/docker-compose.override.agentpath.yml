@@ -40,10 +40,27 @@ services:
       # restart-looped 93 times. 2048 tokens is still four of our ~512-token
       # chunks per batch, which is ample: a query embeds one short string, and
       # ingestion is a one-off pass over 33 chunks.
+      # Lowered from 2048 when the client batch had to rise to 16. TEI sizes its
+      # buffers from (client batch x batch tokens), so raising one means lowering
+      # the other to stay inside the ceiling: at 2048 x 16 the container sat at
+      # 4.6 GiB of real anonymous memory against a 5 GiB cap, which is no margin to
+      # run an ingestion in. Our chunks are ~512 tokens, so 1024 still packs two per
+      # compute batch; it costs throughput on a one-off pass, not correctness.
       - --max-batch-tokens
-      - "2048"
+      - "1024"
+      # How many strings a caller may put in ONE request. Raised from 8 after
+      # ingesting an external corpus failed on it: RAGFlow embeds in batches of 16
+      # and TEI answered `413 batch size 16 > maximum allowed batch size 8`, which
+      # aborted parsing partway through the 40 MRAMG documents. The synthetic corpus
+      # never hit it because its 33 chunks arrived in smaller batches.
+      #
+      # Set to exactly what RAGFlow sends. 32 was tried first, for headroom, and
+      # the container settled at 4.6 GiB of its 5 GiB ceiling - too close to the
+      # limit to run a 40-document ingestion through. Peak compute memory is
+      # governed by --max-batch-tokens, but TEI also sizes buffers from the client
+      # batch it must be able to accept, so this value is not free.
       - --max-client-batch-size
-      - "8"
+      - "16"
       - --auto-truncate
     environment:
       - HUGGINGFACE_HUB_CACHE=/data
@@ -56,8 +73,9 @@ services:
       - agentpath_embedder_cache:/data
     # Hard ceiling. Measured at 7.5 GB resident without one, which is too much to
     # take from a developer machine that is also running an IDE and a browser.
-    # The ONNX runtime sizes its arena from max-batch-tokens, so 4 GB is enough
-    # for the capped batch above; the container is killed rather than allowed to
+    # The ONNX runtime sizes its arena from max-batch-tokens and from the largest
+    # client batch it must accept, so this ceiling and the two batch settings above
+    # are one decision, not three. The container is killed rather than allowed to
     # grow past it, which is the honest failure mode.
     mem_limit: 5g
     ports:

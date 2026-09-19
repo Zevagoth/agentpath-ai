@@ -112,6 +112,18 @@ corpus-refetch: ## Re-download an external corpus even if it is already present
 corpus-export: ## Write the normalised bundle the API reads for an external corpus
 	@uv run python scripts/corpus.py export --corpus $(CORPUS)
 
+.PHONY: corpus-ingest
+corpus-ingest: ## Index an external corpus into its own RAGFlow dataset (needs the stack)
+	@uv run python scripts/corpus.py ingest --corpus $(CORPUS)
+
+.PHONY: corpus-reingest
+corpus-reingest: ## Re-upload every document of an external corpus
+	@uv run python scripts/corpus.py ingest --corpus $(CORPUS) --force
+
+.PHONY: corpus-drop
+corpus-drop: ## Remove one external corpus from RAGFlow, leaving others untouched
+	@uv run python scripts/corpus.py ingest --corpus $(CORPUS) --delete
+
 .PHONY: corpus-inspect
 corpus-inspect: ## Report counts and integrity for an external corpus
 	@uv run python scripts/corpus.py inspect --corpus $(CORPUS)

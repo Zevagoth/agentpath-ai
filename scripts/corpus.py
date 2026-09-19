@@ -104,6 +104,64 @@ def command_export(adapter: CorpusAdapter, _args: argparse.Namespace) -> int:
     return 0
 
 
+def command_ingest(adapter: CorpusAdapter, args: argparse.Namespace) -> int:
+    """Index the corpus into its own RAGFlow dataset. Needs the live stack."""
+    import asyncio
+
+    from agentpath.config import get_settings
+    from agentpath.retrieval.ragflow_client import RAGFlowClient
+    from agentpath_ingestion.corpora.ingest import (
+        CorpusIngestionService,
+        dataset_name_for,
+        write_ingest_manifest,
+    )
+
+    bundle = adapter.load()
+    settings = get_settings()
+
+    async def run() -> int:
+        client = RAGFlowClient(
+            settings.ragflow_base_url,
+            settings.ragflow_api_key.get_secret_value(),
+            timeout=settings.ragflow_timeout_seconds,
+        )
+        try:
+            service = CorpusIngestionService(client, embedding_model=settings.ragflow_embedding_model)
+            if args.delete:
+                removed = await service.delete_corpus(bundle.corpus_id)
+                print(f"deleted {removed} documents from {dataset_name_for(bundle.corpus_id)}")
+                return 0
+
+            report = await service.ingest(bundle, force=args.force)
+            counts = await service.chunk_counts(report)
+            path = write_ingest_manifest(report, BUILD_DIRS[bundle.corpus_id](repo_root()), counts)
+
+            print(f"corpus   : {report.corpus_id}")
+            print(f"dataset  : {report.dataset_name}  ({report.dataset_id})")
+            print(f"embedder : {report.embedding_model}")
+            print(f"actions  : {report.actions}")
+            print(f"removed  : {len(report.removed)}")
+            print(f"seconds  : {report.seconds}")
+            total = sum(counts.values())
+            print(f"\nRAGFlow produced {total:,} chunks across {len(counts)} documents")
+            if counts:
+                ordered = sorted(counts.items(), key=lambda item: -item[1])
+                print(f"  most chunks : {ordered[0][0]} -> {ordered[0][1]:,}")
+                print(f"  fewest      : {ordered[-1][0]} -> {ordered[-1][1]:,}")
+            print(f"manifest : {path}")
+
+            if report.problems:
+                print("\nproblems:", file=sys.stderr)
+                for problem in report.problems:
+                    print(f"  - {problem}", file=sys.stderr)
+                return 1
+            return 0
+        finally:
+            await client.aclose()
+
+    return asyncio.run(run())
+
+
 def command_inspect(adapter: CorpusAdapter, _args: argparse.Namespace) -> int:
     bundle = adapter.load()
 
@@ -162,11 +220,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "command",
-        choices=("fetch", "export", "inspect"),
+        choices=("fetch", "export", "ingest", "inspect"),
         help=(
             "fetch: download the raw artefacts. export: write the bundle the API "
-            "reads. inspect: report what is on disk."
+            "reads. ingest: index into RAGFlow. inspect: report what is on disk."
         ),
+    )
+    parser.add_argument(
+        "--delete",
+        action="store_true",
+        help="With ingest: remove this corpus's documents from its dataset and stop.",
     )
     parser.add_argument(
         "--corpus",
@@ -182,7 +245,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     adapter = ADAPTERS[args.corpus](repo_root())
-    handlers = {"fetch": command_fetch, "export": command_export, "inspect": command_inspect}
+    handlers = {
+        "fetch": command_fetch,
+        "export": command_export,
+        "ingest": command_ingest,
+        "inspect": command_inspect,
+    }
     return handlers[args.command](adapter, args)
 
 

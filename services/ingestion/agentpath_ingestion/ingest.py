@@ -300,6 +300,15 @@ class IngestionService:
 
     # -- parsing ----------------------------------------------------------- #
 
+    async def wait_for_parsing(self, dataset_id: str, document_ids: list[str]) -> None:
+        """Poll until every document reports DONE, or fail with RAGFlow's reason.
+
+        Public because the external-corpus pipeline reuses it: the poll, its timeout
+        and its error wording are the same problem for any dataset, and a second
+        copy would be a second thing to keep correct.
+        """
+        await self._wait_for_parsing(dataset_id, document_ids)
+
     async def _wait_for_parsing(self, dataset_id: str, document_ids: list[str]) -> None:
         """Poll until every document reports DONE, or fail with RAGFlow's reason."""
         pending = set(document_ids)

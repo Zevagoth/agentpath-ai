@@ -414,13 +414,39 @@ class RAGFlowClient:
             json={"document_ids": document_ids},
         )
 
-    async def list_chunks(self, dataset_id: str, document_id: str, *, page_size: int = 100) -> dict[str, Any]:
+    async def list_chunks(
+        self, dataset_id: str, document_id: str, *, page: int = 1, page_size: int = 100
+    ) -> dict[str, Any]:
         data = await self._request(
             "GET",
             f"/api/v1/datasets/{dataset_id}/documents/{document_id}/chunks",
-            params={"page": 1, "page_size": page_size},
+            params={"page": page, "page_size": page_size},
         )
         return data or {}
+
+    #: RAGFlow refuses a larger page: `ValueError('page_size must be less than or
+    #: equal to 100')`. Named here so callers that need every chunk paginate rather
+    #: than asking for more and silently receiving one page.
+    MAX_CHUNK_PAGE_SIZE = 100
+
+    async def count_chunks(self, dataset_id: str, document_id: str) -> int:
+        """Every chunk of one document, counted across pages.
+
+        A single `list_chunks` call returns at most 100, and a document that has
+        more would be silently undercounted - which matters because that count is
+        reported as "what RAGFlow indexed". The largest MRAMG manual produced 97
+        chunks, close enough to the cap that relying on one page was luck.
+        """
+        total = 0
+        page = 1
+        while True:
+            data = await self.list_chunks(dataset_id, document_id, page=page, page_size=self.MAX_CHUNK_PAGE_SIZE)
+            chunks = data.get("chunks") if isinstance(data, dict) else None
+            found = len(chunks or [])
+            total += found
+            if found < self.MAX_CHUNK_PAGE_SIZE:
+                return total
+            page += 1
 
     # -- chunk writes ------------------------------------------------------ #
     #
