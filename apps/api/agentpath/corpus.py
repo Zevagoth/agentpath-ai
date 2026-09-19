@@ -76,6 +76,43 @@ MEDIA_TYPES: Mapping[str, str] = {
     ".webp": "image/webp",
 }
 
+#: The Stage 2A knowledge base, named so the console's corpus selector can offer it
+#: beside the external ones.
+#:
+#: Deliberately *not* a :class:`Corpus` in this catalogue. It is versioned procedures
+#: with product lines, effective dates and step dependencies, served by ``/api/search``
+#: and ``/api/answer``; the external corpora are documents with images, served by
+#: ``/api/corpus-search``. Forcing both into one type would mean a type where half the
+#: fields are null on either side, and the two endpoints would still be two endpoints.
+PROCEDURES_CORPUS_ID = "synthetic-procedures"
+
+#: Every RAGFlow dataset this project owns is prefixed, so a corpus id cannot claim a
+#: dataset it did not create and every dataset is identifiable in the RAGFlow UI.
+#:
+#: Defined here, on the API side, rather than in the ingestion package that writes
+#: the datasets, because both sides need it and this is the direction the dependency
+#: already runs: ``agentpath_ingestion`` imports ``agentpath`` and not the reverse.
+#: Two copies of this rule would mean the reader could look for a dataset the writer
+#: never created, and the failure would surface as "corpus not indexed".
+DATASET_PREFIX = "agentpath-"
+
+#: Used only when a bundle's build record does not name its own window sizes. The
+#: real values come from the bundle - see :attr:`Corpus.image_context_sizes` - so the
+#: API searches the same window the adapter described. These mirror
+#: ``agentpath_ingestion.corpora.mramg.IMAGE_CONTEXT_BEFORE`` / ``_AFTER``: more text
+#: before than after, because a manual names a thing and then shows it far more often
+#: than the reverse.
+DEFAULT_IMAGE_CONTEXT_BEFORE = 600
+DEFAULT_IMAGE_CONTEXT_AFTER = 300
+
+#: A run of two or more spaces is where a line break used to be in text flattened out
+#: of a PDF, and MRAMG-Manual is entirely such text: 17 to 116 real newlines per
+#: document, with paragraphs separated by double spaces instead.
+HEADING_SEGMENT_SEPARATOR = "  "
+
+#: A section label longer than this is not a label. See :func:`heading_label`.
+MAX_SECTION_CHARS = 120
+
 
 @dataclass(frozen=True, slots=True)
 class CorpusImageRecord:
@@ -211,6 +248,51 @@ class Corpus:
         if document is None:
             return ()
         return tuple(record for image_id in document.image_ids if (record := self.images.get(image_id)))
+
+    # -- what a caption-less image offers ----------------------------------- #
+
+    @property
+    def image_context_sizes(self) -> tuple[int, int]:
+        """Characters of document text before and after an image's marker.
+
+        Read from the build record rather than hardcoded, so the window the API
+        searches is the window the adapter documented when it named this corpus's
+        image retrieval mode. The fallbacks are the adapter's own defaults, used only
+        for a bundle built before these keys existed.
+        """
+        before = self.build.get("image_context_before")
+        after = self.build.get("image_context_after")
+        return (
+            int(before) if isinstance(before, int) else DEFAULT_IMAGE_CONTEXT_BEFORE,
+            int(after) if isinstance(after, int) else DEFAULT_IMAGE_CONTEXT_AFTER,
+        )
+
+    def image_context(self, image_id: str) -> str:
+        """The document text around *image_id*'s position.
+
+        For MRAMG-Manual this is the *entire* searchable content of an image: all
+        2,599 captions are empty strings, so there is nothing else to read. See
+        ``docs/RETRIEVAL_MODES.md``.
+
+        Computed here from the verbatim document rather than exported alongside the
+        images. Two reasons: it is derived data, and a derived copy on disk is a copy
+        that can go stale against the text it was derived from; and 2,599 windows of
+        ~900 characters would add 2.3 MB to a 6.7 MB bundle to store something a
+        dictionary lookup and a slice can produce.
+
+        A caption is preferred when one exists, because a caption is what a human
+        wrote about the image and a window is only what happened to sit near it.
+        """
+        record = self.image(image_id)
+        if record is None:
+            return ""
+        if record.caption and record.caption.strip():
+            return record.caption.strip()
+        document = self.document(record.document_id)
+        if document is None:
+            return ""
+        before, after = self.image_context_sizes
+        return _context_window(document.text, record.char_offset, before=before, after=after)
 
     # -- provenance --------------------------------------------------------- #
 
@@ -548,11 +630,72 @@ def _read_jsonl(path: Path) -> Iterator[dict[str, object]]:
                 yield row
 
 
+def heading_label(raw: str) -> str:
+    """Turn a matched markdown heading into a label short enough to be one.
+
+    Three things happen, in order: the ``#`` markers go, because a reader shown
+    "# Components" is being shown the corpus's markup rather than its section name;
+    the text is cut at the first double space, which is where a line break used to be
+    in flattened text; and what is left is capped.
+
+    The bug this exists for, measured: ``^#{1,6} .+$`` matches to the end of a *line*,
+    and in these documents a line holds a heading and the entire section it introduces.
+    Over the 1,506 exported chunks the median "heading" was 943 characters and the
+    longest 5,124. The same fault then appeared independently on the hybrid retrieval
+    path, which derives a label from RAGFlow's chunk text - which is why this is one
+    function rather than two copies of a rule.
+
+    It is a no-op on well-formed markdown, where a heading contains no double space and
+    is far shorter than the cap.
+    """
+    heading = raw.strip().lstrip("#").strip()
+    head, separator, _rest = heading.partition(HEADING_SEGMENT_SEPARATOR)
+    if separator:
+        heading = head.strip()
+    return heading[:MAX_SECTION_CHARS].strip()
+
+
+def dataset_name_for(corpus_id: str) -> str:
+    """The RAGFlow dataset that holds *corpus_id*, and only *corpus_id*.
+
+    The isolation key. One corpus, one dataset, and a retrieval call names exactly one
+    dataset - which is why mixed results are unreachable rather than guarded against.
+    """
+    return f"{DATASET_PREFIX}{corpus_id}"
+
+
 def default_external_root() -> Path:
     """``data/external`` in this repository."""
     from agentpath.paths import repo_root
 
     return repo_root() / "data" / "external"
+
+
+def _context_window(text: str, offset: int, *, before: int, after: int) -> str:
+    """The text around *offset*, trimmed so it does not start or end mid-word.
+
+    Whitespace is collapsed because the result is scored as a bag of words and shown
+    as a one-line explanation; neither use wants the document's line breaks. The
+    40-character guards stop the trim from eating a whole word when the nearest space
+    is far away - which happens at the edges of tables and long identifiers.
+
+    The reference definition of this window is
+    ``agentpath_ingestion.corpora.base.context_window``; the API cannot import that
+    package (``tests/test_visual_steps.py`` asserts the import graph), so the sizes
+    travel through the bundle instead of the code being shared.
+    """
+    start = max(0, offset - before)
+    end = min(len(text), offset + after)
+    window = text[start:end]
+    if start > 0:
+        space = window.find(" ")
+        if 0 <= space < 40:
+            window = window[space + 1 :]
+    if end < len(text):
+        space = window.rfind(" ")
+        if space > len(window) - 40:
+            window = window[:space]
+    return " ".join(window.split())
 
 
 def render_document_html(
@@ -670,8 +813,14 @@ def _escaped_span(piece: str, offset: int, char_start: int | None, char_end: int
 
 
 __all__ = [
+    "DATASET_PREFIX",
+    "DEFAULT_IMAGE_CONTEXT_AFTER",
+    "DEFAULT_IMAGE_CONTEXT_BEFORE",
+    "HEADING_SEGMENT_SEPARATOR",
     "IMAGE_SUFFIXES",
     "MAX_BUNDLE_BYTES",
+    "MAX_SECTION_CHARS",
+    "PROCEDURES_CORPUS_ID",
     "SUPPORTED_FORMAT_VERSION",
     "Corpus",
     "CorpusCatalogue",
@@ -679,6 +828,8 @@ __all__ = [
     "CorpusDocumentRecord",
     "CorpusImageRecord",
     "CorpusQuestionRecord",
+    "dataset_name_for",
     "default_external_root",
+    "heading_label",
     "render_document_html",
 ]

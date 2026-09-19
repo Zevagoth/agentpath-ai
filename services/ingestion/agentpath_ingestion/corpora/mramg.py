@@ -93,7 +93,12 @@ CHUNK_TARGET_CHARS = 1_400
 CHUNK_OVERLAP_CHARS = 200
 
 #: Markdown-ish headings appear throughout these manuals ("# Personal safety
-#: equipment"), which gives chunks a section label for free.
+#: equipment"), which gives chunks a section label.
+#:
+#: Not quite for free, as first assumed. Because these documents are flattened - a
+#: "line" holds a heading and the whole section it introduces - ``.+$`` matches far
+#: past the heading, and the label has to be trimmed at the segment boundary. That is
+#: done by ``base._heading_positions``; see ``HEADING_SEGMENT_SEPARATOR``.
 HEADING_PATTERN = r"^#{1,6} .+$"
 
 #: How much text around a ``<PIC>`` marker describes the image. Asymmetric because
@@ -576,6 +581,7 @@ __all__ = [
     "CORPUS_ID",
     "CORPUS_LICENCE",
     "CORPUS_TITLE",
+    "HEADING_PATTERN",
     "IMAGE_ARCHIVE_URL",
     "IMAGE_CONTEXT_AFTER",
     "IMAGE_CONTEXT_BEFORE",

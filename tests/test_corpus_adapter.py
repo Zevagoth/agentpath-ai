@@ -17,6 +17,7 @@ import pytest
 from agentpath_ingestion.corpora import CorpusAdapter
 from agentpath_ingestion.corpora.base import (
     IMAGE_PLACEHOLDER,
+    MAX_SECTION_CHARS,
     CorpusBundle,
     CorpusChunk,
     CorpusDocument,
@@ -31,6 +32,7 @@ from agentpath_ingestion.corpora.mramg import (
     CHUNK_TARGET_CHARS,
     CORPUS_ID,
     CORPUS_LICENCE,
+    HEADING_PATTERN,
     MramgError,
     MramgManualAdapter,
     default_root,
@@ -147,8 +149,59 @@ def test_a_chunk_records_the_heading_above_it_when_asked() -> None:
 
     chunks = slice_chunks(document, target_chars=400, overlap_chars=0, heading_pattern=r"^#{1,6} .+$")
 
-    assert chunks[0].section == "# First section"
-    assert any(chunk.section == "# Second section" for chunk in chunks)
+    # The marker is not part of the label: a reader shown "# First section" is being
+    # shown the corpus's markup rather than its section name.
+    assert chunks[0].section == "First section"
+    assert any(chunk.section == "Second section" for chunk in chunks)
+
+
+def test_a_heading_on_a_flattened_line_is_trimmed_to_the_heading() -> None:
+    """The bug this fixes, in miniature.
+
+    These manuals were flattened out of PDFs: a "line" holds a heading *and* the
+    section it introduces, separated by a double space. ``^#{1,6} .+$`` therefore
+    matched to the end of the section, and the label on a chunk became the section's
+    text - measured over the real 1,506 chunks, a median label of 943 characters and a
+    worst case of 5,124 before this.
+    """
+    body = "Everything the section says, at length. " * 30
+    text = f"# Real heading  {body}"
+    document = build_document(text)
+
+    chunks = slice_chunks(document, target_chars=400, overlap_chars=0, heading_pattern=HEADING_PATTERN)
+
+    assert chunks[0].section == "Real heading"
+    assert all(len(chunk.section or "") <= MAX_SECTION_CHARS for chunk in chunks)
+
+
+def test_a_flattened_heading_with_no_separator_is_capped() -> None:
+    """The backstop, for a document flattened without even double spaces surviving.
+
+    A label is a label. ``50000#c005`` in the real corpus is exactly this case:
+    "The blower1.Shoulder strap2.Throttle trigger..." with no separator anywhere.
+    """
+    text = "# " + ("Heading text that never ends. " * 20)
+    document = build_document(text)
+
+    chunks = slice_chunks(document, target_chars=400, overlap_chars=0, heading_pattern=HEADING_PATTERN)
+
+    section = chunks[0].section
+    assert section is not None
+    # At most the cap, and not exactly it: the cap is followed by a strip, so a cut
+    # landing on a space yields one character less. The invariant is the bound.
+    assert len(section) <= MAX_SECTION_CHARS
+    assert len(section) > MAX_SECTION_CHARS - 10, "the cap should be doing the trimming here"
+    assert section == section.strip()
+
+
+def test_a_well_formed_markdown_heading_is_untouched_by_the_trimming() -> None:
+    """The trimming must be a no-op on input that was never flattened."""
+    text = "# A perfectly normal heading\n\n" + ("a" * 500)
+    document = build_document(text)
+
+    chunks = slice_chunks(document, target_chars=400, overlap_chars=0, heading_pattern=HEADING_PATTERN)
+
+    assert chunks[0].section == "A perfectly normal heading"
 
 
 def test_chunk_ids_are_stable_and_ordered() -> None:

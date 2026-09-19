@@ -21,9 +21,12 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentpath.case_context import CaseContext
+from agentpath.corpus_retrieval.ports import CorpusRetrievalResult, OffsetSource, RetrievalMethod
+from agentpath.corpus_retrieval.service import CorpusSearchService
 from agentpath.domain import EvidenceLevel, Language, ProcedureHit, RetrievalMode, SearchResult
 from agentpath.evidence import ABSTENTION_MESSAGE
 from agentpath.generation.answer_service import AnswerResult, AnswerStatus, StepSource
+from agentpath.provenance import ImageProvenance, Provenance, SourceKind
 from agentpath.screenshots import SCREENSHOT_MEDIA_TYPE, Screenshot, ScreenshotCatalogue
 
 
@@ -602,4 +605,305 @@ class AnswerResponse(BaseModel):
             ),
             timings_ms=dict(result.timings_ms),
             retrieval_metadata=dict(result.retrieval_metadata),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# External corpora
+#
+# A separate family of models rather than an extension of SearchResponse. The two
+# answer different questions - one ranks versioned procedures for a case, the other
+# ranks documents and images of a third-party corpus - and a union type would have
+# meant every field on both sides becoming optional, which pushes the branching into
+# the UI and makes "which fields are set" a matter of convention.
+# --------------------------------------------------------------------------- #
+
+
+class ImageProvenanceOut(BaseModel):
+    """One image, with everything a reader needs to check it.
+
+    ``source_url`` is the upstream original and is often ``null``: 299 of
+    MRAMG-Manual's 2,599 images record none. The field is null rather than
+    backfilled with a plausible link, and the UI says so - a fabricated "original"
+    would be the exact failure the provenance contract exists to prevent.
+    """
+
+    image_id: str
+    url: str | None = Field(default=None, description="Where this API serves the bytes.")
+    source_url: str | None = Field(default=None, description="Upstream original, or null when the corpus has none.")
+    document_id: str | None = None
+    position_index: int | None = Field(default=None, description="0-based ordinal among the document's images.")
+    char_offset: int | None = Field(default=None, description="Where the image belongs in the document's own text.")
+    caption: str | None = Field(default=None, description="Null for every MRAMG-Manual image; see RETRIEVAL_MODES.md.")
+    position_summary: str = Field(description="One line naming the position, for display.")
+
+    @classmethod
+    def from_provenance(cls, record: ImageProvenance) -> ImageProvenanceOut:
+        return cls(
+            image_id=record.image_id,
+            url=record.served_url,
+            source_url=record.source_url,
+            document_id=record.document_id,
+            position_index=record.position_index,
+            char_offset=record.char_offset,
+            caption=record.caption,
+            position_summary=record.position_summary,
+        )
+
+
+class ProvenanceOut(BaseModel):
+    """The trail for one retrieved document, and the link that opens it.
+
+    ``open_url`` is issued by the server, complete, and may be ``null``. A client
+    must not build it: the whole point of the contract is that a link either came
+    from a validated upstream URL or from this API's own source registry, and a
+    concatenated third option would bypass both. ``has_original`` is the field a UI
+    branches on to decide whether to render `Open original source` at all.
+    """
+
+    corpus_id: str
+    dataset_id: str | None = None
+    document_id: str | None = None
+    document_title: str | None = None
+    chunk_id: str | None = None
+    kind: SourceKind = Field(description="Whether the original is an upstream URL, a local document, or absent.")
+    open_url: str | None = Field(default=None, description="Complete link that opens the original at the citation.")
+    has_original: bool = Field(description="False means there is genuinely no original to open.")
+    position: str = Field(description="Human-readable position within the document.")
+    section: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+    images: list[ImageProvenanceOut] = Field(default_factory=list)
+
+    @classmethod
+    def from_provenance(cls, record: Provenance) -> ProvenanceOut:
+        return cls(
+            corpus_id=record.corpus_id,
+            dataset_id=record.dataset_id,
+            document_id=record.document_id,
+            document_title=record.document_title,
+            chunk_id=record.chunk_id,
+            kind=record.kind,
+            open_url=record.link(),
+            has_original=record.kind is not SourceKind.NONE,
+            position=record.locator.summary,
+            section=record.locator.section,
+            char_start=record.locator.char_start,
+            char_end=record.locator.char_end,
+            images=[ImageProvenanceOut.from_provenance(image) for image in record.images],
+        )
+
+
+class CorpusSummary(BaseModel):
+    """One corpus the console can select, with its attribution.
+
+    Licence and attribution are in the *list* rather than on every result, because
+    they are facts about the corpus. They are required fields: this project indexes
+    someone else's Apache-2.0 data, and a UI that can render a result without being
+    able to render where it came from is a UI that will.
+    """
+
+    corpus_id: str
+    title: str
+    licence: str
+    attribution: str
+    counts: dict[str, int]
+    image_retrieval_mode: str = Field(
+        description="How images are ranked. 'context-window' means no model saw the image."
+    )
+    methods: list[RetrievalMethod] = Field(description="Methods available for this corpus, in registration order.")
+    default_method: RetrievalMethod
+
+
+class CorpusListResponse(BaseModel):
+    """Every corpus available, plus the synthetic procedures for comparison."""
+
+    corpora: list[CorpusSummary]
+    #: The Stage 2A knowledge base. Listed so the console's selector is complete, but
+    #: it is served by `/api/search` and `/api/answer`, not by `/api/corpus-search`:
+    #: it is procedures with versions and product lines, not documents with images.
+    procedures_corpus_id: str
+    problems: list[str] = Field(
+        default_factory=list,
+        description="Bundles that were rejected at startup. A corpus missing here is reported, not silent.",
+    )
+
+
+class CorpusSearchRequest(BaseModel):
+    """A question, and which corpus and method to answer it with.
+
+    ``corpus_id`` is required and has no default. A default would mean a client could
+    search without stating what it searched, and the one thing this endpoint must
+    never do is return results the caller cannot attribute to a corpus.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    corpus_id: str = Field(
+        min_length=1,
+        max_length=64,
+        description="Which corpus to search. Exactly one; mixed results are not available.",
+        examples=["mramg-manual"],
+    )
+    question: str = Field(min_length=1, max_length=2000, description="The question, in the user's own words.")
+    method: RetrievalMethod | None = Field(
+        default=None,
+        description="Which retrieval method to use. Defaults to the corpus's best available method.",
+    )
+    limit: int = Field(default=3, ge=1, le=10, description="How many documents to return.")
+    image_limit: int = Field(default=5, ge=0, le=20, description="How many images to return. Zero disables images.")
+
+
+class CorpusPassageOut(BaseModel):
+    """One matched span, with how its position was established.
+
+    ``offset_source`` is exposed deliberately. A citation whose offsets were recovered
+    by a whitespace-insensitive search is slightly less precise at its edges than one
+    that matched verbatim, and ``unresolved`` means the document opens at the top. A
+    reviewer can see which they are looking at instead of being told all citations are
+    equal.
+    """
+
+    chunk_id: str
+    text: str
+    score: float
+    offset_source: OffsetSource
+    char_start: int | None = None
+    char_end: int | None = None
+    section: str | None = None
+    lexical_score: float | None = None
+    semantic_score: float | None = None
+
+
+class CorpusDocumentOut(BaseModel):
+    """One retrieved document, its best passages, and its citation."""
+
+    document_id: str
+    title: str
+    score: float
+    rank: int
+    passages: list[CorpusPassageOut]
+    provenance: ProvenanceOut
+
+
+class CorpusImageOut(BaseModel):
+    """One image the image selector chose, and the reason it chose it.
+
+    Only selected images appear here. A document's other images are not included even
+    though they exist and could be rendered: showing an image because it is nearby
+    rather than because it was chosen is what the image-selection step exists to stop.
+    """
+
+    image_id: str
+    document_id: str
+    url: str
+    source_url: str | None = None
+    score: float
+    rank: int
+    strategy: str = Field(description="What the selector read: 'context-window' or 'document-order'.")
+    reason: str
+    evidence: str = Field(default="", description="The text that scored. Empty for the positional baseline.")
+    matched_terms: list[str] = Field(default_factory=list)
+    position_summary: str = ""
+    caption: str | None = None
+
+
+class CorpusSearchResponse(BaseModel):
+    """The full result of one corpus search.
+
+    ``corpus_id`` and ``method`` are echoed rather than assumed, so a stored response
+    records what produced it. That matters for the evaluation: a results table whose
+    rows cannot prove which method wrote them is not evidence.
+    """
+
+    corpus_id: str
+    corpus_title: str
+    licence: str
+    attribution: str
+    method: RetrievalMethod
+    image_strategy: str
+    image_retrieval_mode: str
+    question: str
+    documents: list[CorpusDocumentOut]
+    images: list[CorpusImageOut]
+    timings_ms: dict[str, float]
+    problems: list[str] = Field(
+        default_factory=list,
+        description="Unresolved offsets and missing image files. Part of the result, not a log line.",
+    )
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_result(cls, result: CorpusRetrievalResult, service: CorpusSearchService) -> CorpusSearchResponse:
+        corpus = service.corpus
+        documents: list[CorpusDocumentOut] = []
+        for hit in result.documents:
+            provenance = service.citation_for(hit, result)
+            if provenance is None:
+                continue
+            documents.append(
+                CorpusDocumentOut(
+                    document_id=hit.document_id,
+                    title=hit.title,
+                    score=round(hit.score, 6),
+                    rank=hit.rank,
+                    passages=[
+                        CorpusPassageOut(
+                            chunk_id=passage.chunk_id,
+                            text=passage.text,
+                            score=round(passage.score, 6),
+                            offset_source=passage.offset_source,
+                            char_start=passage.char_start,
+                            char_end=passage.char_end,
+                            section=passage.section,
+                            lexical_score=passage.lexical_score,
+                            semantic_score=passage.semantic_score,
+                        )
+                        for passage in hit.passages
+                    ],
+                    provenance=ProvenanceOut.from_provenance(provenance),
+                )
+            )
+
+        images: list[CorpusImageOut] = []
+        for image_hit in result.images:
+            record = corpus.image(image_hit.image_id)
+            if record is None:
+                continue
+            trail = record.provenance()
+            images.append(
+                CorpusImageOut(
+                    image_id=image_hit.image_id,
+                    document_id=image_hit.document_id,
+                    url=record.served_url,
+                    source_url=trail.source_url,
+                    score=round(image_hit.score, 6),
+                    rank=image_hit.rank,
+                    strategy=image_hit.strategy,
+                    reason=image_hit.reason,
+                    evidence=image_hit.evidence,
+                    matched_terms=list(image_hit.matched_terms),
+                    position_summary=trail.position_summary,
+                    caption=trail.caption,
+                )
+            )
+
+        return cls(
+            corpus_id=result.corpus_id,
+            corpus_title=corpus.title,
+            licence=corpus.licence,
+            attribution=corpus.attribution,
+            method=result.method,
+            image_strategy=service.image_strategy,
+            image_retrieval_mode=corpus.image_retrieval_mode,
+            question=result.question,
+            documents=documents,
+            images=images,
+            timings_ms={
+                "retrieval": round(result.retrieval_ms, 2),
+                "image_selection": round(result.image_selection_ms, 2),
+                "total": round(result.total_ms, 2),
+            },
+            problems=list(result.problems),
+            diagnostics=dict(result.diagnostics),
         )

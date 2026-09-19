@@ -45,25 +45,23 @@ from typing import Any
 
 import structlog
 
+from agentpath.corpus import DATASET_PREFIX, dataset_name_for
 from agentpath.retrieval.ragflow_client import RAGFlowClient
 from agentpath_ingestion.corpora.base import CorpusBundle
 from agentpath_ingestion.ingest import PARSER_CONFIG, SHA_FIELD, IngestionError, IngestionService
 
 logger = structlog.get_logger(__name__)
 
-#: Dataset name for a corpus. Prefixed so every dataset this project owns is
-#: identifiable in the RAGFlow UI, and so a corpus id cannot collide with the
-#: procedures dataset.
-DATASET_PREFIX = "agentpath-"
-
 #: Written beside the exported bundle. A report of the last run, not a source of
 #: truth: RAGFlow's own listing decides what exists, exactly as the visual-chunk
 #: manifest does.
 INGEST_MANIFEST_NAME = "ingest.json"
 
-
-def dataset_name_for(corpus_id: str) -> str:
-    return f"{DATASET_PREFIX}{corpus_id}"
+# ``DATASET_PREFIX`` and ``dataset_name_for`` are imported from ``agentpath.corpus``
+# and re-exported here, where callers expect them. The rule that a corpus's dataset is
+# ``agentpath-{corpus_id}`` has to be identical on the writing side and the reading
+# side, and the reader cannot import this package, so the single definition lives
+# there. A second copy would let the API look for a dataset ingestion never created.
 
 
 @dataclass(frozen=True, slots=True)

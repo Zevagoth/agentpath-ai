@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from agentpath.corpus import HEADING_SEGMENT_SEPARATOR, MAX_SECTION_CHARS, heading_label
+
 #: The marker MRAMG uses for "an image belongs here". Declared in the base module
 #: because the *concept* - a placeholder in text that an image fills - is not
 #: specific to one corpus, and a second corpus using a different token should
@@ -372,10 +374,22 @@ def slice_chunks(
 
 
 def _heading_positions(text: str, pattern: str) -> tuple[tuple[int, str], ...]:
-    """Every heading in *text* as ``(offset, heading)``, in document order."""
+    """Every heading in *text* as ``(offset, label)``, in document order.
+
+    The captured text is trimmed to the heading itself by
+    :func:`agentpath.corpus.heading_label`, because what is wanted is a label a reader
+    can glance at beside a citation, not the block the heading introduces. That function
+    lives on the reading side because the hybrid retrieval path needs the identical rule
+    and cannot import this package.
+    """
     import re
 
-    return tuple((match.start(), match.group(0).strip()) for match in re.finditer(pattern, text, re.MULTILINE))
+    positions: list[tuple[int, str]] = []
+    for match in re.finditer(pattern, text, re.MULTILINE):
+        label = heading_label(match.group(0))
+        if label:
+            positions.append((match.start(), label))
+    return tuple(positions)
 
 
 def _governing_heading(headings: tuple[tuple[int, str], ...], span_start: int, span_end: int) -> str | None:
@@ -459,7 +473,12 @@ def write_jsonl(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
 
 
 __all__ = [
+    # Re-exported from ``agentpath.corpus``, where the single definition lives: both the
+    # writing side (here) and the hybrid retrieval path need the same heading rule, and
+    # the reader cannot import this package.
+    "HEADING_SEGMENT_SEPARATOR",
     "IMAGE_PLACEHOLDER",
+    "MAX_SECTION_CHARS",
     "CorpusAdapter",
     "CorpusBundle",
     "CorpusChunk",
@@ -469,6 +488,7 @@ __all__ = [
     "FetchReport",
     "FetchedArtefact",
     "context_window",
+    "heading_label",
     "iter_jsonl",
     "locate_placeholders",
     "slice_chunks",

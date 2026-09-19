@@ -14,6 +14,8 @@ import structlog
 
 from agentpath.config import Settings
 from agentpath.corpus import CorpusCatalogue
+from agentpath.corpus_retrieval.ports import RetrievalMethod
+from agentpath.corpus_retrieval.service import CorpusSearchService, build_methods, default_method
 from agentpath.domain import DependencyHealth
 from agentpath.generation import AnswerService, OllamaClient, OllamaRuntimeOptions
 from agentpath.procedures import ProcedureCatalogue
@@ -52,6 +54,26 @@ class ServiceContext:
     #: Defaulted to empty so a deployment with none behaves exactly as before and
     #: the source routes simply have nothing to serve.
     corpora: CorpusCatalogue = field(default_factory=CorpusCatalogue.empty)
+    #: Retrieval methods per corpus: ``{corpus_id: {method: service}}``.
+    #:
+    #: Nested rather than keyed by a ``(corpus_id, method)`` tuple so the corpus is
+    #: resolved before the method, which is the order the request is validated in and
+    #: the order that makes "unknown corpus" and "method not available for this
+    #: corpus" two different 404s. Empty when no bundle is present.
+    corpus_methods: dict[str, dict[RetrievalMethod, CorpusSearchService]] = field(default_factory=dict)
+
+    def corpus_method(self, corpus_id: str, method: RetrievalMethod | None) -> CorpusSearchService | None:
+        """The service for one corpus and method, or ``None`` when unavailable.
+
+        Total by design: both arguments come from a request body, so an unknown corpus
+        and an unavailable method are expected inputs. The caller distinguishes them by
+        asking whether the corpus exists first.
+        """
+        available = self.corpus_methods.get(corpus_id)
+        if not available:
+            return None
+        chosen = method if method is not None else default_method(available)
+        return available.get(chosen)
 
     async def aclose(self) -> None:
         await self.client.aclose()
@@ -209,6 +231,11 @@ def build_context(settings: Settings) -> ServiceContext:
     retriever = build_retriever(settings, client)
     search = SearchService(retriever=retriever, lexicon=lexicon, settings=settings)
 
+    # One set of methods per corpus, built at startup because the lexical baseline's
+    # BM25 index and the image windows are the kind of work that must not happen in a
+    # request: measured at 301 ms for 1,506 chunks and 2,599 windows on MRAMG-Manual.
+    corpus_methods = {corpus.corpus_id: build_methods(corpus, settings=settings, client=client) for corpus in corpora}
+
     # Constructing the Ollama client is cheap - an httpx client and a settings
     # snapshot, no connection and no model load - so the answer service is built
     # here rather than per request. Whether the daemon is up and the model pulled
@@ -235,6 +262,9 @@ def build_context(settings: Settings) -> ServiceContext:
         procedures=len(procedures),
         procedure_steps=procedures.step_count,
         external_corpora=list(corpora.ids),
+        corpus_methods={
+            corpus_id: [method.value for method in methods] for corpus_id, methods in corpus_methods.items()
+        },
     )
     return ServiceContext(
         settings=settings,
@@ -246,4 +276,5 @@ def build_context(settings: Settings) -> ServiceContext:
         screenshots=screenshots,
         procedures=procedures,
         corpora=corpora,
+        corpus_methods=corpus_methods,
     )

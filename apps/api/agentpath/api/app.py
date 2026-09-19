@@ -29,13 +29,18 @@ from agentpath.api.deps import ServiceContext, build_context
 from agentpath.api.schemas import (
     AnswerRequest,
     AnswerResponse,
+    CorpusListResponse,
+    CorpusSearchRequest,
+    CorpusSearchResponse,
+    CorpusSummary,
     DependencyStatus,
     HealthResponse,
     SearchRequest,
     SearchResponse,
 )
 from agentpath.config import Settings, get_settings
-from agentpath.corpus import render_document_html
+from agentpath.corpus import PROCEDURES_CORPUS_ID, render_document_html
+from agentpath.corpus_retrieval.service import default_method
 from agentpath.logging_setup import configure_logging
 from agentpath.retrieval.ports import RetrievalError, RetrievalUnavailable
 from agentpath.screenshots import (
@@ -237,6 +242,122 @@ def create_app(settings: Settings | None = None, context: ServiceContext | None 
             context=payload.case_context,
         )
         return AnswerResponse.from_result(result, ctx.screenshots)
+
+    @app.get(
+        "/api/corpora",
+        response_model=CorpusListResponse,
+        summary="List the knowledge bases available to search",
+    )
+    async def corpora(request: Request) -> CorpusListResponse:
+        """What can be searched, and under what licence.
+
+        The console's corpus selector reads this rather than hardcoding a list, so a
+        corpus that failed to load is absent here and visibly absent there. Licence and
+        attribution travel with every entry: this deployment indexes someone else's
+        Apache-2.0 data, and a client that can render a result must be able to render
+        where it came from.
+        """
+        ctx: ServiceContext = request.app.state.context
+        summaries: list[CorpusSummary] = []
+        for corpus in ctx.corpora:
+            methods = ctx.corpus_methods.get(corpus.corpus_id) or {}
+            if not methods:
+                # A corpus with no usable method would be a selector entry that fails
+                # on click. It stays out of the list and says why in `problems`.
+                continue
+            summaries.append(
+                CorpusSummary(
+                    corpus_id=corpus.corpus_id,
+                    title=corpus.title,
+                    licence=corpus.licence,
+                    attribution=corpus.attribution,
+                    counts=corpus.counts,
+                    image_retrieval_mode=corpus.image_retrieval_mode,
+                    methods=list(methods),
+                    default_method=default_method(methods),
+                )
+            )
+        problems = list(ctx.corpora.problems)
+        problems.extend(
+            f"corpus {corpus.corpus_id!r} loaded but has no available retrieval method"
+            for corpus in ctx.corpora
+            if not ctx.corpus_methods.get(corpus.corpus_id)
+        )
+        return CorpusListResponse(
+            corpora=summaries,
+            procedures_corpus_id=PROCEDURES_CORPUS_ID,
+            problems=problems,
+        )
+
+    @app.post(
+        "/api/corpus-search",
+        response_model=CorpusSearchResponse,
+        summary="Search one external corpus for documents and images",
+        responses={404: {"description": "No such corpus, or that method is not available for it."}},
+    )
+    async def corpus_search(request: Request, payload: CorpusSearchRequest) -> CorpusSearchResponse:
+        """Retrieve documents and images from exactly one corpus.
+
+        `corpus_id` is required and there is no "search everything" value. Mixing two
+        corpora in one result is not disabled by a check here - each service holds one
+        corpus and one dataset, so there is no code path that could produce it.
+
+        The synthetic procedures are refused by name rather than falling through to a
+        generic 404, because "wrong endpoint" and "no such corpus" are different
+        mistakes and only one of them is fixed by changing the URL.
+        """
+        ctx: ServiceContext = request.app.state.context
+
+        if payload.corpus_id == PROCEDURES_CORPUS_ID:
+            return JSONResponse(  # type: ignore[return-value]
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={
+                    "error": "wrong_endpoint_for_corpus",
+                    "message": (
+                        f"{PROCEDURES_CORPUS_ID!r} is the procedure knowledge base, which is served by "
+                        "POST /api/search and POST /api/answer. This endpoint serves external "
+                        "document corpora."
+                    ),
+                },
+            )
+
+        corpus = ctx.corpora.corpus(payload.corpus_id)
+        if corpus is None:
+            logger.info(
+                "corpus.search_unknown_corpus",
+                requested=payload.corpus_id[:MAX_LOGGED_ID_LENGTH],
+                available=list(ctx.corpora.ids),
+            )
+            return JSONResponse(  # type: ignore[return-value]
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={
+                    "error": "corpus_not_found",
+                    "message": "No corpus under that id.",
+                    "available": list(ctx.corpora.ids),
+                },
+            )
+
+        service = ctx.corpus_method(payload.corpus_id, payload.method)
+        if service is None:
+            available = sorted(method.value for method in (ctx.corpus_methods.get(payload.corpus_id) or {}))
+            return JSONResponse(  # type: ignore[return-value]
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={
+                    "error": "method_not_available",
+                    "message": (
+                        f"Method {payload.method.value if payload.method else 'default'!r} is not available "
+                        f"for corpus {payload.corpus_id!r}."
+                    ),
+                    "available": available,
+                },
+            )
+
+        result = await service.search(
+            payload.question,
+            limit=payload.limit,
+            image_limit=payload.image_limit,
+        )
+        return CorpusSearchResponse.from_result(result, service)
 
     @app.get(
         SCREENSHOT_URL_PREFIX + "/{screenshot_id}",
