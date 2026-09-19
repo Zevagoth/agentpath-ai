@@ -377,3 +377,75 @@ async def test_request_id_is_echoed_for_log_correlation() -> None:
         await client.aclose()
         await manager.__aexit__(None, None, None)
     assert response.headers["x-request-id"] == "abc123"
+
+
+# --------------------------------------------------------------------------- #
+# Browser access
+# --------------------------------------------------------------------------- #
+#
+# The console is served from a different loopback port than the API, so every
+# request it makes is cross-origin and the allow-list is load-bearing. It went
+# untested, and the consequence was that the browser suite served on port 3100
+# got "Disallowed CORS origin" on every call - which reaches the page as a failed
+# fetch, indistinguishable from the API being down. These pin both ends: the ports
+# the console is actually served on, and the fact that the rule is still a
+# loopback allow-list rather than a wildcard.
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+        # `next start` under Playwright.
+        "http://127.0.0.1:3100",
+        "http://localhost:3100",
+    ],
+)
+async def test_the_console_origins_are_allowed_to_call_the_api(origin: str) -> None:
+    client, manager = await _client(FakeRetriever())
+    try:
+        preflight = await client.options(
+            "/api/answer",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+    finally:
+        await client.aclose()
+        await manager.__aexit__(None, None, None)
+
+    assert preflight.status_code == 200, preflight.text
+    assert preflight.headers["access-control-allow-origin"] == origin
+    assert "POST" in preflight.headers["access-control-allow-methods"]
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://evil.example",
+        "https://agentpath.example.com",
+        # A different loopback port is still not on the list: the allow-list names
+        # the ports the console runs on, it does not trust localhost generally.
+        "http://127.0.0.1:9999",
+    ],
+)
+async def test_other_origins_are_refused(origin: str) -> None:
+    client, manager = await _client(FakeRetriever())
+    try:
+        preflight = await client.options(
+            "/api/search",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+    finally:
+        await client.aclose()
+        await manager.__aexit__(None, None, None)
+
+    assert preflight.status_code == 400
+    assert "access-control-allow-origin" not in preflight.headers

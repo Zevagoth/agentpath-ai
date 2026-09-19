@@ -916,14 +916,26 @@ async def test_discovery_is_the_response_metadata_and_there_is_no_listing_route(
 
 
 def test_cors_still_allows_only_loopback_origins_and_get_or_post() -> None:
-    """An `<img src>` load needs no CORS at all, so nothing was widened for it."""
+    """An `<img src>` load needs no CORS at all, so nothing was widened for it.
+
+    Port 3100 is where Playwright serves the production build; without it the
+    browser suite could not reach the API at all. Both ports are loopback and the
+    list is still a list - the property being guarded here is that it never becomes
+    a wildcard, and that the methods stay at the two the console uses.
+    """
     app = create_app(settings=_settings(), context=_context(FakeRetriever()))
     cors = [middleware for middleware in app.user_middleware if "CORS" in str(middleware.cls)]
     assert len(cors) == 1
     options = cors[0].kwargs
-    assert set(options["allow_origins"]) == {"http://127.0.0.1:3000", "http://localhost:3000"}
+    assert set(options["allow_origins"]) == {
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3100",
+        "http://localhost:3100",
+    }
     assert set(options["allow_methods"]) == {"GET", "POST"}
     assert "*" not in options["allow_origins"]
+    assert all(origin.startswith(("http://127.0.0.1:", "http://localhost:")) for origin in options["allow_origins"])
 
 
 async def test_the_screenshot_route_is_reachable_from_the_console_origin() -> None:

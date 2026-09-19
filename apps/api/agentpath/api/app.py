@@ -113,9 +113,20 @@ def create_app(settings: Settings | None = None, context: ServiceContext | None 
     # allowed here in any case, so even a `fetch()` for the bytes from the console
     # works. Adding an origin, a method or a header for the sake of images would
     # have bought nothing.
+    # Port 3100 is where Playwright serves the production build. Without it the
+    # browser specs could not reach this API at all: every request was answered
+    # with "Disallowed CORS origin", which surfaced in the console as a failed
+    # fetch and so looked exactly like the API being down. Naming both ports keeps
+    # the rule narrow - still loopback-only, still no wildcard - while letting the
+    # end-to-end tests exercise the same code path a developer uses on 3000.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"],
+        allow_origins=[
+            "http://127.0.0.1:3000",
+            "http://localhost:3000",
+            "http://127.0.0.1:3100",
+            "http://localhost:3100",
+        ],
         allow_methods=["GET", "POST"],
         allow_headers=["Content-Type"],
     )
