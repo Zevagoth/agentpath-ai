@@ -35,23 +35,42 @@ on held-out.
    Border-contour detection was tried as an alternative and **rejected**: it scored 3 of 14,
    because glyphs and arrowheads are also closed loops that fill their bounding box.
 
-4. **Arrowheads are the edge detector.** This is the load-bearing decision. Connector curves
-   *cross* in a dense chart, so their connected components merge and counting components
-   undercounts edges - the same failure the language model had. An arrowhead is a solid blob,
-   so it survives an erosion that thins the curve away, and **one arrowhead is exactly one
-   edge**. Counting heads is therefore robust to crossings in a way that counting curves is not.
+4. **Connectors get their own threshold.** Node contrast and connector contrast are not the
+   same thing. On ``8267.jpeg`` the connectors are dark brown on dark navy and the node
+   threshold catches 0.13% of the page, which produced *zero* edges. The stroke threshold is
+   therefore chosen separately, by the number of connectors it makes resolvable - a criterion
+   that needs no ground truth because it counts components joining exactly two nodes.
 
-5. **Direction comes from the arrowhead, not from geometry.** The head end is where the
-   arrowhead is. The tail is found by walking the stroke mask away from the head.
+5. **Dashes are bridged along the curve, not with a square kernel.** Many of these charts draw
+   connectors dotted. Measured on 40 dev images, square closing left 108 components reaching
+   only one node and 282 reaching none, against 253 real edges, and growing the square to 13x13
+   barely helped: a square has to be as wide as the gap in every direction at once, so it
+   merges neighbouring curves before it bridges anything. Closing with a thin **line** kernel at
+   12 orientations and unioning the results cut those to 6 and 5 - the fragmentation problem
+   essentially disappeared.
 
-6. **Association is geodesic, not euclidean.** The source node is the first node boundary
-   reached by a breadth-first walk *along the stroke pixels* from the arrowhead. A straight-line
-   nearest-node test would pick whichever box happens to sit close to the curve's middle, which
-   on a curved connector is frequently the wrong one.
+6. **A connector is a component; a bundle is traced.** After bridging, a component touching
+   exactly two nodes is one edge and needs no interpretation. Crossings and fans leave
+   components touching three or more, which held roughly 70 of the 276 real edges, so they are
+   split by *following* each curve: step along the mask preferring to carry straight on, and
+   stop at whichever node is reached. Carrying straight on is precisely what tells two crossing
+   curves apart, which is why this is a tracer rather than another morphological trick.
+   Measured on 40 dev images: 207 edges from components plus 45 from tracing, against 253 real
+   edges, with 24 of 37 charts exact on count.
 
-7. **Ambiguity is recorded, never resolved by guessing.** A head whose walk reaches two node
-   boundaries at a similar distance, or reaches none, produces an edge marked ambiguous with
-   the reason attached. The consumer shows the original image and says review is needed.
+7. **Direction comes from ink, not from thickness.** The arrowhead end of a connector carries
+   more ink than the tail end. Comparing *maximum thickness* was tried first and tied on 78 of
+   about 180 edges, because the distance transform is coarse and a thin barb is barely wider
+   than its own shaft - and arrowhead size is not even comparable between charts: ``8035.jpeg``
+   draws solid triangles of radius 4.6 against a line radius of 1.9, while ``8113.jpeg`` draws
+   barbs of radius 2.3 against the same 1.9. Comparing the *amount of ink* in a disc at each end
+   of the same connector is a relative test within one curve, so chart-to-chart variation
+   cancels. Ties fell from 78 to 9 and direction accuracy rose from about 77% to 87.7%.
+
+8. **Ambiguity is recorded, never resolved by guessing.** Endpoints that could not be
+   established and directions that could not be established are separate facts, tracked
+   separately, and both are drawn on the overlay. A consumer may use an edge's *adjacency*
+   while refusing to trust its *direction*.
 
 Loops are legal. Nothing here assumes a DAG, and a cycle is never a reason to reject a graph:
 "no? go back and retry" is a real branch in a real troubleshooting chart.
@@ -60,7 +79,6 @@ Loops are legal. Nothing here assumes a DAG, and a cycle is never a reason to re
 from __future__ import annotations
 
 import statistics
-from collections import deque
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -75,10 +93,17 @@ logger = structlog.get_logger(__name__)
 # Constants, all measured on dev
 # --------------------------------------------------------------------------- #
 
-#: Tried in this order. The first producing a self-consistent box set wins. 40 handles the
-#: common coloured backgrounds; 14 and 8 exist for white-on-white, where the node fill differs
-#: from the background by under 20 levels.
+#: Tried in this order for *nodes*. The first producing a self-consistent box set wins. 40
+#: handles the common coloured backgrounds; 14 and 8 exist for white-on-white, where the node
+#: fill differs from the background by under 20 levels.
 FOREGROUND_THRESHOLDS = (40, 24, 14, 8)
+
+#: Tried in this order for *connectors*, which can be much fainter than the nodes they join.
+STROKE_THRESHOLDS = (40, 30, 24, 18, 14, 10, 8, 6)
+
+#: A stroke layer covering more than this fraction of the page outside the nodes is not a set of
+#: connectors, it is a flooded mask. Guards the low end of the sweep.
+STROKE_SHARE_CAP = 0.05
 
 #: Opening kernel that separates node fills from connectors. See the module docstring for the
 #: comparison against 5, 9 and 11.
@@ -96,28 +121,47 @@ MIN_NODE_FILL_RATIO = 0.5
 #: consistency score.
 NODE_HEIGHT_TOLERANCE = 0.25
 
-#: Node regions are grown by this much before being subtracted from the stroke mask, so a
-#: connector that touches a border does not inherit the node's pixels.
-NODE_DILATION = 3
+#: Node bounding boxes are grown by this much before being removed from the stroke layer. One
+#: pixel, not three: the earlier value of 3 cut the fat part off any arrowhead whose tip touches
+#: its target's border, which collapsed measured head thickness to line width on several charts.
+#: Removing the node *shape* instead was tried and rejected - the opened mask under-covers the
+#: node by a couple of pixels, so its own rim survived and became 84% of the stroke layer on
+#: ``8267.jpeg``.
+NODE_BLOCK_PAD = 1
 
-#: Window for the local fill density that separates arrowheads from lines. Wide enough that a
-#: line's contribution is diluted, narrow enough that two nearby heads stay separate.
-ARROWHEAD_WINDOW = 9
+#: A connector counts as attached to a node if it comes within this distance of the node's block.
+#: Not zero, because a dotted connector's first dash can start short of the border.
+ATTACH_GAP = 6
 
-#: Fill fraction above which a window is arrowhead rather than line. A 3-pixel line fills about
-#: 0.33 of a 9x9 window; a filled triangle fills most of it. Chosen in the gap, on dev.
-ARROWHEAD_MIN_DENSITY = 0.5
+#: Line kernel length and orientation count for dash bridging. 9 was measured against 15, 21 and
+#: 27: all of them fix fragmentation, and the longer ones then merge separate curves into
+#: bundles - resolvable components fell from 206 at length 9 to 133 at length 27.
+BRIDGE_LENGTH = 9
+BRIDGE_ANGLES = 12
 
-#: Minimum blob area to count as an arrowhead, after the density filter.
-MIN_ARROWHEAD_AREA = 6
+#: Components smaller than this are JPEG speckle, not connectors.
+MIN_CONNECTOR_AREA = 8
 
-#: How far the geodesic walk may travel along the stroke mask before giving up on finding a
-#: source. Generous: a connector on a 1,500-px-wide chart can be long.
-MAX_WALK_STEPS = 4000
+#: Tracer geometry. The step is the radius of the ring of candidate next positions; the turn
+#: limit is what makes the tracer carry straight on through a crossing rather than turn onto the
+#: other curve.
+TRACE_STEP = 3
+TRACE_MAX_TURN = 55.0
+TRACE_MAX_STEPS = 400
+#: How much of the previous heading is kept when the tracer turns. Smoothing, so one noisy step
+#: on a compressed edge cannot throw the trace off the curve.
+TRACE_HEADING_INERTIA = 0.6
 
-#: When the two best source candidates are within this ratio of each other, which one the
-#: curve actually came from is not established, and the edge is marked ambiguous.
-SOURCE_MARGIN_RATIO = 1.35
+#: Radius of the disc in which ink is counted at each end of a connector, as a fraction of the
+#: median node height. Wide enough to contain an arrowhead, narrow enough not to reach the
+#: middle of a short connector.
+DIRECTION_RADIUS_RATIO = 0.45
+
+#: Ink ratio between the two ends below which direction is not considered established. 1.0 means
+#: "any difference at all decides"; measured on dev, the ratio was 1.89 at the median when the
+#: decision was right and 1.06 when it was wrong, so a margin above 1.0 trades recall for
+#: precision. Kept at 1.15 so near-ties are reported as undirected rather than guessed.
+MIN_DIRECTION_RATIO = 1.15
 
 
 class NodeShape(StrEnum):
@@ -163,28 +207,42 @@ class DetectedNode:
 
 @dataclass(frozen=True, slots=True)
 class DetectedEdge:
-    """One arrow, with the evidence that produced it.
+    """One connector, with the evidence that produced it.
 
-    ``ambiguous`` is the honest outcome when the walk could not establish a source. Such an edge
-    is still reported - the arrowhead is real - but it must not be used to route anything.
+    Two different things can fail, so they are two different fields. ``ambiguous`` means the
+    *endpoints* are not established - the connector was found but not what it joins. ``directed``
+    means which end carries the arrowhead is established. An edge can be unambiguous and
+    undirected, and such an edge is still useful: it says these two nodes are connected, which is
+    a real fact about the chart, while refusing to claim a direction nobody could measure.
     """
 
     edge_id: str
-    #: ``None`` when the walk found no unambiguous source.
     source_id: str | None
-    target_id: str
-    #: Where the arrowhead sits.
-    head: tuple[int, int]
-    #: Where the walk ended, i.e. the tail.
-    tail: tuple[int, int] | None
-    #: Geodesic length of the walk in pixels. Short is more trustworthy.
-    walk_length: int
-    arrowhead_area: int
+    target_id: str | None
+    #: Where the connector meets the source and the target. Drawn on the overlay.
+    source_point: tuple[int, int] | None = None
+    target_point: tuple[int, int] | None = None
+    #: ``"component"`` when the connector was its own component, ``"trace"`` when it was followed
+    #: out of a bundle of crossing curves. A reviewer should look harder at traced edges.
+    resolved_by: str = "component"
+    #: Ink counted in a disc at each end: the direction evidence, in the units it was measured in.
+    source_ink: int = 0
+    target_ink: int = 0
+    #: Whether the arrowhead end was established, and by what margin.
+    directed: bool = False
+    direction_ratio: float = 1.0
     ambiguous: bool = False
     reason: str = ""
-    #: Text found beside the arrow, e.g. "Yes". Filled by the OCR stage.
+    #: Text found beside the connector, e.g. "Yes". Filled by the OCR stage.
     label: str = ""
     confidence: float = 0.0
+
+    @property
+    def pair(self) -> tuple[str, str] | None:
+        """``(source, target)`` when both ends are known, else ``None``."""
+        if self.source_id and self.target_id:
+            return (self.source_id, self.target_id)
+        return None
 
 
 @dataclass
@@ -196,6 +254,7 @@ class DiagramParse:
     height: int
     background: tuple[int, int, int]
     threshold_used: int
+    stroke_threshold: int = 0
     nodes: list[DetectedNode] = field(default_factory=list)
     edges: list[DetectedEdge] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
@@ -211,24 +270,47 @@ class DiagramParse:
         return len(self.edges)
 
     @property
-    def confident_edges(self) -> list[DetectedEdge]:
-        return [edge for edge in self.edges if not edge.ambiguous and edge.source_id]
+    def connected_edges(self) -> list[DetectedEdge]:
+        """Edges whose two endpoints are established, whatever their direction."""
+        return [edge for edge in self.edges if not edge.ambiguous and edge.source_id and edge.target_id]
+
+    @property
+    def directed_edges(self) -> list[DetectedEdge]:
+        """Edges safe to route with: endpoints *and* direction established."""
+        return [edge for edge in self.connected_edges if edge.directed]
+
+    @property
+    def undirected_only_edges(self) -> list[DetectedEdge]:
+        """Adjacency is known, direction is not. Real information, and not routable."""
+        return [edge for edge in self.connected_edges if not edge.directed]
 
     @property
     def ambiguous_edges(self) -> list[DetectedEdge]:
-        return [edge for edge in self.edges if edge.ambiguous or not edge.source_id]
+        return [edge for edge in self.edges if edge.ambiguous or not (edge.source_id and edge.target_id)]
+
+    def _as_labels(self, edges: list[DetectedEdge]) -> list[tuple[str, str]]:
+        by_id = {node.node_id: node.text for node in self.nodes}
+        return [(by_id.get(edge.source_id or "", ""), by_id.get(edge.target_id or "", "")) for edge in edges]
 
     @property
     def label_edges(self) -> list[tuple[str, str]]:
-        """Confident edges as ``(source text, target text)`` pairs."""
-        by_id = {node.node_id: node.text for node in self.nodes}
-        return [(by_id.get(edge.source_id or "", ""), by_id.get(edge.target_id, "")) for edge in self.confident_edges]
+        """Directed edges as ``(source text, target text)`` pairs."""
+        return self._as_labels(self.directed_edges)
+
+    @property
+    def connected_label_edges(self) -> list[tuple[str, str]]:
+        """Every edge with both ends established, as label pairs.
+
+        The order is still head-last where ink decided it, but for an edge whose direction was not
+        established the order carries no claim and only the adjacency should be read from it.
+        """
+        return self._as_labels(self.connected_edges)
 
     @property
     def branch_node_ids(self) -> list[str]:
-        """Nodes with more than one confident outgoing edge. The decision points."""
+        """Nodes with more than one established outgoing edge. The decision points."""
         outgoing: dict[str, int] = {}
-        for edge in self.confident_edges:
+        for edge in self.directed_edges:
             if edge.source_id:
                 outgoing[edge.source_id] = outgoing.get(edge.source_id, 0) + 1
         return [node_id for node_id, count in outgoing.items() if count > 1]
@@ -240,6 +322,7 @@ class DiagramParse:
             "height": self.height,
             "background": list(self.background),
             "threshold_used": self.threshold_used,
+            "stroke_threshold": self.stroke_threshold,
             "nodes": [
                 {
                     "node_id": node.node_id,
@@ -256,10 +339,13 @@ class DiagramParse:
                     "edge_id": edge.edge_id,
                     "source_id": edge.source_id,
                     "target_id": edge.target_id,
-                    "head": list(edge.head),
-                    "tail": list(edge.tail) if edge.tail else None,
-                    "walk_length": edge.walk_length,
-                    "arrowhead_area": edge.arrowhead_area,
+                    "source_point": list(edge.source_point) if edge.source_point else None,
+                    "target_point": list(edge.target_point) if edge.target_point else None,
+                    "resolved_by": edge.resolved_by,
+                    "source_ink": edge.source_ink,
+                    "target_ink": edge.target_ink,
+                    "directed": edge.directed,
+                    "direction_ratio": round(edge.direction_ratio, 3),
                     "ambiguous": edge.ambiguous,
                     "reason": edge.reason,
                     "label": edge.label,
@@ -270,8 +356,10 @@ class DiagramParse:
             "counts": {
                 "nodes": self.node_count,
                 "edges": self.edge_count,
-                "confident_edges": len(self.confident_edges),
-                "ambiguous_edges": len(self.ambiguous_edges),
+                "connected": len(self.connected_edges),
+                "directed": len(self.directed_edges),
+                "undirected_only": len(self.undirected_only_edges),
+                "ambiguous": len(self.ambiguous_edges),
                 "branch_nodes": len(self.branch_node_ids),
             },
             "problems": self.problems,
@@ -312,12 +400,86 @@ def foreground_mask(image: np.ndarray, background: np.ndarray, threshold: int) -
 # --------------------------------------------------------------------------- #
 
 
+#: A row of a node's blob counts as "full width" if it spans at least this fraction of the node's
+#: width. Rows below it, at the top or bottom of the blob, are an arrowhead fused onto the node
+#: rather than part of it. See :func:`_refine_box`.
+BOX_FULL_WIDTH_RATIO = 0.6
+
+#: Refinement may not remove more than this fraction of a blob. If it wants to, the blob is not a
+#: node with something stuck to it and the original rectangle is kept.
+BOX_MIN_KEPT_AREA = 0.4
+
+
+def _longest_run(keep: np.ndarray) -> tuple[int, int]:
+    """Start and end of the longest run of ``True``. ``(0, 0)`` when there is none."""
+    best_start = best_end = 0
+    best_length = 0
+    start: int | None = None
+    for index, value in enumerate([*keep.tolist(), False]):
+        if value and start is None:
+            start = index
+        elif not value and start is not None:
+            if index - start > best_length:
+                best_length, best_start, best_end = index - start, start, index
+            start = None
+    return best_start, best_end
+
+
+def _refine_box(mask: np.ndarray) -> tuple[int, int, int, int]:
+    """Trim anything fused onto a node off its bounding box.
+
+    A solid arrowhead is about 11 pixels across, which is wider than the 7-pixel opening kernel, so
+    it survives the opening. When it touches the node it joins the same component and the bounding
+    rectangle grows by the length of the arrow. Measured on ``8240.jpeg``: the detected top edge
+    sat 8 pixels above the node, which put three arrowheads *inside* the box, where the stroke
+    layer then deleted them along with the node - and with the arrowheads gone, direction was
+    decided by noise. That chart scored 0% on direction.
+
+    Every node in this corpus is drawn as a rounded rectangle - all 13,068 of them use Mermaid's
+    ``entity(label)`` form - so inside a node every row spans nearly the full width, and a row
+    holding only an arrowhead spans a fraction of it. The refinement keeps the longest run of
+    full-width rows, then does the same for columns.
+
+    Returns ``(x, y, width, height)`` relative to the mask.
+    """
+    height, width = mask.shape
+    binary = mask > 0
+    row_counts = binary.sum(axis=1)
+    if not row_counts.any():
+        return (0, 0, width, height)
+    # A high percentile rather than the maximum, so one bulging row cannot set the standard.
+    row_width = float(np.percentile(row_counts[row_counts > 0], 80))
+    y0, y1 = _longest_run(row_counts >= BOX_FULL_WIDTH_RATIO * row_width)
+    if y1 <= y0:
+        return (0, 0, width, height)
+
+    column_counts = binary[y0:y1].sum(axis=0)
+    if not column_counts.any():
+        return (0, y0, width, y1 - y0)
+    column_height = float(np.percentile(column_counts[column_counts > 0], 80))
+    x0, x1 = _longest_run(column_counts >= BOX_FULL_WIDTH_RATIO * column_height)
+    if x1 <= x0:
+        return (0, y0, width, y1 - y0)
+
+    if (x1 - x0) * (y1 - y0) < BOX_MIN_KEPT_AREA * width * height:
+        # Refinement wants to throw most of the blob away, so the blob is not a node with an arrow
+        # stuck to it and this heuristic does not apply.
+        return (0, 0, width, height)
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
 def _classify_shape(contour: np.ndarray, width: int, height: int, fill_ratio: float) -> NodeShape:
     """Rectangle, rounded, diamond or ellipse, from the contour's vertex count.
 
     ``approxPolyDP`` at 2% of the perimeter: a Mermaid rectangle approximates to four vertices,
     a diamond also to four but rotated, and a rounded box or stadium to more. The diamond is
     told apart by its vertices sitting near the edge midpoints rather than the corners.
+
+    **This classifier is unmeasured.** Every node in the FlowLearn simulated corpus is a rounded
+    rectangle, so the corpus cannot tell a correct diamond from an incorrect one and the shape
+    field must not be relied on until there is a corpus that contains other shapes. It is kept
+    because real procedure workflows do use a diamond for a decision, and it is reported in the
+    overlay so a reviewer can see what it said rather than trusting it.
     """
     perimeter = cv2.arcLength(contour, True)
     if perimeter <= 0:
@@ -358,8 +520,21 @@ def _boxes_at_threshold(
     found: list[tuple[tuple[int, int, int, int], float, NodeShape]] = []
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
-        area = cv2.contourArea(contour)
-        if area < MIN_NODE_AREA or min(w, h) < MIN_NODE_SIDE:
+        if cv2.contourArea(contour) < MIN_NODE_AREA or min(w, h) < MIN_NODE_SIDE:
+            continue
+
+        # Trim any arrowhead fused onto the node before anything else uses this rectangle. The
+        # box feeds the stroke layer, the OCR crop and the attachment map, so an inflated box
+        # damages all three at once.
+        blob = np.zeros((h, w), np.uint8)
+        cv2.drawContours(blob, [contour - np.array([[x, y]])], -1, 255, thickness=-1)
+        dx, dy, dw, dh = _refine_box(blob)
+        x, y, w, h = x + dx, y + dy, dw, dh
+        if min(w, h) < MIN_NODE_SIDE:
+            continue
+
+        area = float((blob[dy : dy + dh, dx : dx + dw] > 0).sum())
+        if area < MIN_NODE_AREA:
             continue
         fill_ratio = area / float(w * h) if w * h else 0.0
         if fill_ratio < MIN_NODE_FILL_RATIO:
@@ -426,246 +601,366 @@ def detect_nodes(image: np.ndarray, background: np.ndarray) -> tuple[list[Detect
 
 
 # --------------------------------------------------------------------------- #
-# 4 and 5. Connectors and arrowheads
+# 4. The stroke layer: where the nodes are not
 # --------------------------------------------------------------------------- #
 
 
-def stroke_mask(image: np.ndarray, background: np.ndarray, nodes: list[DetectedNode], threshold: int) -> np.ndarray:
-    """Foreground with the node regions removed: what is left is connectors.
-
-    Node boxes are dilated before subtraction so a connector that touches a border does not
-    inherit the node's own pixels, which would fuse every arrow meeting that node into one
-    component.
-    """
-    foreground = foreground_mask(image, background, threshold)
-    occupied = np.zeros(image.shape[:2], np.uint8)
+def node_block(nodes: list[DetectedNode], shape: tuple[int, int], pad: int = NODE_BLOCK_PAD) -> np.ndarray:
+    """Filled bounding boxes of every node, padded, as one mask."""
+    block = np.zeros(shape, np.uint8)
     for node in nodes:
         cv2.rectangle(
-            occupied,
-            (node.x - NODE_DILATION, node.y - NODE_DILATION),
-            (node.x + node.width + NODE_DILATION, node.y + node.height + NODE_DILATION),
+            block,
+            (node.x - pad, node.y - pad),
+            (node.x + node.width + pad, node.y + node.height + pad),
             255,
             thickness=-1,
         )
-    return cv2.bitwise_and(foreground, cv2.bitwise_not(occupied))
+    return block
 
 
-def detect_arrowheads(strokes: np.ndarray) -> list[tuple[tuple[int, int], int]]:
-    """Find the solid triangles. Each one is exactly one edge.
-
-    This is what makes the parser robust to crossing connectors: two curves that intersect merge
-    into one connected component, so counting components undercounts, but each curve still ends
-    in its own arrowhead.
-
-    **Local fill density**, not erosion and not a distance transform. Both of those were measured
-    on dev and rejected:
-
-    * *Erosion* with a 3-pixel kernel leaves a 3-pixel line one pixel wide instead of removing
-      it, so curve fragments were counted as heads. Measured: 33 heads found where 13 edges
-      existed, and arrow-count accuracy of 10%.
-    * *Distance transform* separates them in principle - a line's inscribed radius is about 2 and
-      an arrowhead's about 4 - but the margin is too narrow to threshold reliably once JPEG
-      compression has blurred a 22 KB image. Measured across 14 charts, the best cutoff was
-      exact on some and off by a factor of two on others.
-
-    Density has a much wider margin. In a 9x9 window a 3-pixel-wide line fills about a third;
-    an arrowhead fills most of it. The threshold sits in a gap rather than on a knife edge.
-
-    Returns ``(centroid, area)`` per head.
-    """
-    # Fraction of each window that is stroke. normalize=True makes the box filter an average, so
-    # the result is directly a fill fraction in 0..1.
-    density = cv2.boxFilter(
-        (strokes > 0).astype(np.float32),
-        ddepth=-1,
-        ksize=(ARROWHEAD_WINDOW, ARROWHEAD_WINDOW),
-        normalize=True,
-    )
-    peaks = ((density >= ARROWHEAD_MIN_DENSITY) & (strokes > 0)).astype(np.uint8) * 255
-    # Close pinholes so one arrowhead is one component rather than a cluster.
-    peaks = cv2.morphologyEx(peaks, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-
-    count, _labels, stats, centroids = cv2.connectedComponentsWithStats(peaks, connectivity=8)
-    heads: list[tuple[tuple[int, int], int]] = []
-    for index in range(1, count):
-        area = int(stats[index, cv2.CC_STAT_AREA])
-        if area < MIN_ARROWHEAD_AREA:
-            continue
-        cx, cy = centroids[index]
-        heads.append(((round(float(cx)), round(float(cy))), area))
-    return heads
-
-
-# --------------------------------------------------------------------------- #
-# 6. Association: which nodes does this arrow join?
-# --------------------------------------------------------------------------- #
-
-
-def _nearest_node(nodes: list[DetectedNode], px: int, py: int) -> tuple[DetectedNode | None, float]:
-    """The node whose border is closest to a point, with that distance."""
-    best: DetectedNode | None = None
-    best_distance = float("inf")
-    for node in nodes:
-        dx = max(node.x - px, 0, px - (node.x + node.width))
-        dy = max(node.y - py, 0, py - (node.y + node.height))
-        distance = float(np.hypot(dx, dy))
-        if distance < best_distance:
-            best, best_distance = node, distance
-    return best, best_distance
-
-
-def _walk_to_source(
-    strokes: np.ndarray,
-    nodes: list[DetectedNode],
-    head: tuple[int, int],
-    target: DetectedNode,
-) -> tuple[DetectedNode | None, tuple[int, int] | None, int, str]:
-    """Walk the connector away from the arrowhead until a different node is reached.
-
-    Breadth-first over the mask, so distance is *along the curve* rather than across the image.
-    A straight-line nearest-node test picks whichever box sits near the curve's middle, which on
-    the bezier connectors these charts use is frequently not the source.
-
-    The mask walked is the **full foreground**, with node boxes acting as barriers that are
-    entered but never expanded from. The first attempt walked a mask with the node regions
-    deleted, and it failed on most arrows: a connector routed close to a box was severed by that
-    deletion, so the walk exhausted after a fifth of the curve and reported no source. Measured
-    on ``9837.jpeg``: 83 reachable pixels out of a ~430-pixel curve.
-
-    Returns ``(source, tail point, steps, reason)``. ``source`` is ``None`` when nothing was
-    reached or when two candidates were too close to separate, and ``reason`` says which.
-    """
-    height, width = strokes.shape
-    start_x, start_y = head
-    if not (0 <= start_x < width and 0 <= start_y < height):
-        return None, None, 0, "arrowhead lies outside the image"
-
-    # Seed from the arrowhead's neighbourhood: its centroid can fall on a gap between the
-    # triangle's pixels after erosion.
-    seeds: list[tuple[int, int, int]] = []
-    for dy in range(-3, 4):
-        for dx in range(-3, 4):
-            sx, sy = start_x + dx, start_y + dy
-            if 0 <= sx < width and 0 <= sy < height and strokes[sy, sx]:
-                seeds.append((sx, sy, 0))
-    if not seeds:
-        return None, None, 0, "no stroke pixels next to the arrowhead"
-
-    # A lookup of which node owns each pixel, built once. Checking every node for every visited
-    # pixel was the first version and made the walk ten times more expensive for no benefit.
-    owner = np.full(strokes.shape, -1, dtype=np.int16)
+def owner_map(nodes: list[DetectedNode], shape: tuple[int, int], pad: int = NODE_BLOCK_PAD) -> np.ndarray:
+    """Which node occupies each pixel, or -1. Built once; the alternative was testing every node
+    for every pixel, which cost ten times as much for the same answer."""
+    owner = np.full(shape, -1, dtype=np.int16)
     for index, node in enumerate(nodes):
-        y0 = max(node.y - NODE_DILATION, 0)
-        y1 = min(node.y + node.height + NODE_DILATION, height)
-        x0 = max(node.x - NODE_DILATION, 0)
-        x1 = min(node.x + node.width + NODE_DILATION, width)
+        y0, y1 = max(node.y - pad, 0), min(node.y + node.height + pad, shape[0])
+        x0, x1 = max(node.x - pad, 0), min(node.x + node.width + pad, shape[1])
         owner[y0:y1, x0:x1] = index
-    target_index = next((i for i, node in enumerate(nodes) if node.node_id == target.node_id), -1)
+    return owner
 
-    visited = np.zeros(strokes.shape, dtype=bool)
-    queue: deque[tuple[int, int, int]] = deque()
-    for sx, sy, _ in seeds:
-        visited[sy, sx] = True
-        queue.append((sx, sy, 0))
 
-    # Every node reached, with the number of steps it took.
-    reached: dict[str, tuple[DetectedNode, int, tuple[int, int]]] = {}
-    steps_taken = 0
+def attachment_map(nodes: list[DetectedNode], shape: tuple[int, int], gap: int = ATTACH_GAP) -> np.ndarray:
+    """The owner map widened by *gap*, so a connector stopping just short still counts as attached.
 
-    while queue and steps_taken < MAX_WALK_STEPS:
-        x, y, steps = queue.popleft()
-        steps_taken += 1
+    Widened by repeated four-neighbour propagation rather than by dilating each node separately,
+    so where two nodes are close the nearer one wins instead of the later one overwriting.
+    """
+    grown = owner_map(nodes, shape)
+    for _ in range(gap):
+        shifted = grown.copy()
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            rolled = np.roll(grown, (dy, dx), axis=(0, 1))
+            take = (shifted < 0) & (rolled >= 0)
+            shifted[take] = rolled[take]
+        grown = shifted
+    return grown
 
-        here = int(owner[y, x])
-        if here >= 0 and here != target_index:
-            node = nodes[here]
-            if node.node_id not in reached:
-                reached[node.node_id] = (node, steps, (x, y))
-            # A node is a destination, never a corridor: expanding through it would let the walk
-            # emerge on the far side and claim a node the curve never touched.
+
+def _line_kernel(length: int, degrees: float) -> np.ndarray:
+    """A one-pixel-wide line through the centre of a square, at *degrees*."""
+    size = length if length % 2 else length + 1
+    kernel = np.zeros((size, size), np.uint8)
+    centre = size // 2
+    radians = np.deg2rad(degrees)
+    dx, dy = float(np.cos(radians)), float(np.sin(radians))
+    cv2.line(
+        kernel,
+        (round(centre - dx * centre), round(centre - dy * centre)),
+        (round(centre + dx * centre), round(centre + dy * centre)),
+        1,
+        1,
+    )
+    return kernel
+
+
+_BRIDGE_KERNELS: tuple[np.ndarray, ...] = tuple(
+    _line_kernel(BRIDGE_LENGTH, 180.0 * index / BRIDGE_ANGLES) for index in range(BRIDGE_ANGLES)
+)
+
+
+def bridge_dashes(strokes: np.ndarray) -> np.ndarray:
+    """Join a dotted connector into one component without fattening it sideways.
+
+    A closing with a thin line kernel spans a gap along that line's direction and leaves
+    everything else alone, so unioning the result over 12 orientations reconnects dashes at any
+    angle while keeping two parallel curves apart. See the module docstring for the measurement
+    against square closing.
+    """
+    out = strokes.copy()
+    for kernel in _BRIDGE_KERNELS:
+        out = cv2.bitwise_or(out, cv2.morphologyEx(strokes, cv2.MORPH_CLOSE, kernel))
+    return out
+
+
+def _resolvable_count(bridged: np.ndarray, attachment: np.ndarray) -> int:
+    """How many components join exactly two nodes. The stroke threshold's selection signal."""
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(bridged, connectivity=8)
+    total = 0
+    for index in range(1, count):
+        if int(stats[index, cv2.CC_STAT_AREA]) < MIN_CONNECTOR_AREA:
             continue
-        if here == target_index and steps > 0:
-            # Back inside the box this arrow points at. Nothing useful lies beyond.
+        touched = {int(value) for value in np.unique(attachment[labels == index]) if value >= 0}
+        if len(touched) == 2:
+            total += 1
+    return total
+
+
+def stroke_layer(
+    image: np.ndarray, background: np.ndarray, nodes: list[DetectedNode], attachment: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """The connector layer, at whichever threshold resolves the most connectors.
+
+    Returns the raw mask, the dash-bridged mask, and the threshold chosen. The raw mask is kept
+    because direction is decided by counting ink, and bridging adds pixels that were never drawn.
+    """
+    outside = cv2.bitwise_not(node_block(nodes, image.shape[:2]))
+    best: tuple[np.ndarray | None, np.ndarray | None, int, int] = (None, None, STROKE_THRESHOLDS[0], -1)
+    for threshold in STROKE_THRESHOLDS:
+        candidate = cv2.bitwise_and(foreground_mask(image, background, threshold), outside)
+        if float((candidate > 0).mean()) > STROKE_SHARE_CAP:
             continue
+        bridged = bridge_dashes(candidate)
+        resolvable = _resolvable_count(bridged, attachment)
+        if resolvable > best[3]:
+            best = (candidate, bridged, threshold, resolvable)
 
-        # Stop early once something is found and the walk has gone far enough past it to see
-        # whether a rival is equally close.
-        if reached and steps > min(entry[1] for entry in reached.values()) * SOURCE_MARGIN_RATIO:
-            break
-
-        for dy in (-1, 0, 1):
-            for dx in (-1, 0, 1):
-                if dx == 0 and dy == 0:
-                    continue
-                nx, ny = x + dx, y + dy
-                if 0 <= nx < width and 0 <= ny < height and strokes[ny, nx] and not visited[ny, nx]:
-                    visited[ny, nx] = True
-                    queue.append((nx, ny, steps + 1))
-
-    if not reached:
-        return None, None, steps_taken, "the curve from this arrowhead reaches no other node"
-
-    ordered = sorted(reached.values(), key=lambda entry: entry[1])
-    source, steps, tail = ordered[0]
-    if len(ordered) > 1:
-        runner_up_steps = ordered[1][1]
-        if steps > 0 and runner_up_steps / max(steps, 1) < SOURCE_MARGIN_RATIO:
-            return (
-                None,
-                tail,
-                steps,
-                f"two possible sources at similar distance along the curve "
-                f"({source.node_id} at {steps}, {ordered[1][0].node_id} at {runner_up_steps})",
-            )
-    return source, tail, steps, ""
+    if best[0] is None or best[1] is None:
+        # Every threshold floods. Take the strictest and let validation report the state.
+        raw = cv2.bitwise_and(foreground_mask(image, background, STROKE_THRESHOLDS[0]), outside)
+        return raw, bridge_dashes(raw), STROKE_THRESHOLDS[0]
+    return best[0], best[1], best[2]
 
 
-def associate_edges(
-    strokes: np.ndarray, nodes: list[DetectedNode], heads: list[tuple[tuple[int, int], int]]
+# --------------------------------------------------------------------------- #
+# 5. Connectors: components, and tracing the ones that merged
+# --------------------------------------------------------------------------- #
+
+#: Offsets forming a ring of radius ``TRACE_STEP``, the tracer's candidate next positions.
+_TRACE_RING: tuple[tuple[int, int], ...] = tuple(
+    (dx, dy)
+    for dx in range(-TRACE_STEP, TRACE_STEP + 1)
+    for dy in range(-TRACE_STEP, TRACE_STEP + 1)
+    if abs(float(np.hypot(dx, dy)) - TRACE_STEP) <= 0.75
+)
+
+
+def _contact_points(component: np.ndarray, attachment: np.ndarray, index: int) -> list[tuple[float, float]]:
+    """Centroid of each separate place where this component meets node *index*."""
+    contact = (component & (attachment == index)).astype(np.uint8)
+    count, _labels, _stats, centroids = cv2.connectedComponentsWithStats(contact, connectivity=8)
+    return [(float(centroids[i][0]), float(centroids[i][1])) for i in range(1, count)]
+
+
+def _ink_near(point: tuple[float, float], radius: int, component: np.ndarray, strokes: np.ndarray) -> int:
+    """Drawn pixels of this component within *radius* of *point*.
+
+    Counted on the raw stroke mask, so bridged-in pixels cannot masquerade as an arrowhead.
+    """
+    height, width = component.shape
+    cx, cy = round(float(point[0])), round(float(point[1]))
+    y0, y1 = max(cy - radius, 0), min(cy + radius + 1, height)
+    x0, x1 = max(cx - radius, 0), min(cx + radius + 1, width)
+    window = component[y0:y1, x0:x1]
+    if not window.any():
+        return 0
+    return int(((strokes[y0:y1, x0:x1] > 0) & window).sum())
+
+
+def _trace_curve(
+    bridged: np.ndarray, attachment: np.ndarray, start: tuple[float, float], heading: np.ndarray, from_index: int
+) -> tuple[int, tuple[int, int]] | None:
+    """Follow one curve out of a bundle, carrying straight on where curves cross.
+
+    Returns the node index reached and the point at which it was reached, or ``None`` when the
+    curve could not be followed - which is reported as ambiguity rather than filled in.
+    """
+    height, width = bridged.shape
+    position = np.array([float(start[0]), float(start[1])])
+    direction = heading.astype(float).copy()
+    for _ in range(TRACE_MAX_STEPS):
+        best: tuple[int, int, np.ndarray] | None = None
+        best_angle = TRACE_MAX_TURN
+        for dx, dy in _TRACE_RING:
+            nx, ny = round(float(position[0]) + dx), round(float(position[1]) + dy)
+            if not (0 <= nx < width and 0 <= ny < height) or not bridged[ny, nx]:
+                continue
+            step = np.array([float(dx), float(dy)])
+            step /= float(np.linalg.norm(step))
+            angle = float(np.degrees(np.arccos(np.clip(float(np.dot(step, direction)), -1.0, 1.0))))
+            if angle < best_angle:
+                best, best_angle = (nx, ny, step), angle
+        if best is None:
+            return None
+        nx, ny, step = best
+        position = np.array([float(nx), float(ny)])
+        direction = direction * TRACE_HEADING_INERTIA + step * (1.0 - TRACE_HEADING_INERTIA)
+        norm = float(np.linalg.norm(direction))
+        if norm < 1e-6:
+            return None
+        direction /= norm
+        here = int(attachment[ny, nx])
+        if here >= 0 and here != from_index:
+            return here, (nx, ny)
+    return None
+
+
+def _direction_of(
+    component: np.ndarray,
+    strokes: np.ndarray,
+    radius: int,
+    first: tuple[float, float],
+    second: tuple[float, float],
+) -> tuple[bool, int, int, float]:
+    """Which end carries the arrowhead, by comparing ink at the two ends of one connector.
+
+    Returns ``(second end is the head, ink at first, ink at second, ratio)``. The caller decides
+    what to do when the ratio is too close to call.
+    """
+    ink_first = _ink_near(first, radius, component, strokes)
+    ink_second = _ink_near(second, radius, component, strokes)
+    larger, smaller = max(ink_first, ink_second), min(ink_first, ink_second)
+    ratio = larger / smaller if smaller else float("inf") if larger else 1.0
+    return ink_second > ink_first, ink_first, ink_second, ratio
+
+
+def extract_edges(
+    strokes: np.ndarray,
+    bridged: np.ndarray,
+    nodes: list[DetectedNode],
+    attachment: np.ndarray,
 ) -> list[DetectedEdge]:
-    """Turn arrowheads into directed edges by walking each one back to its source."""
+    """Turn the connector layer into edges, recording how each one was established."""
+    if not nodes:
+        return []
+    radius = max(8, round(DIRECTION_RADIUS_RATIO * float(np.median([node.height for node in nodes]))))
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(bridged, connectivity=8)
     edges: list[DetectedEdge] = []
-    for index, (head, area) in enumerate(heads):
-        target, _distance = _nearest_node(nodes, head[0], head[1])
-        if target is None:
+
+    def add(
+        source: int | None,
+        target: int | None,
+        component: np.ndarray,
+        first: tuple[float, float] | None,
+        second: tuple[float, float] | None,
+        resolved_by: str,
+        reason: str = "",
+    ) -> None:
+        """Record one edge, deciding its direction from ink when both ends are known."""
+        index = len(edges)
+        if source is None or target is None or first is None or second is None:
             edges.append(
                 DetectedEdge(
                     edge_id=f"e{index}",
-                    source_id=None,
-                    target_id="",
-                    head=head,
-                    tail=None,
-                    walk_length=0,
-                    arrowhead_area=area,
+                    source_id=nodes[source].node_id if source is not None else None,
+                    target_id=nodes[target].node_id if target is not None else None,
+                    source_point=(round(first[0]), round(first[1])) if first else None,
+                    target_point=(round(second[0]), round(second[1])) if second else None,
+                    resolved_by=resolved_by,
                     ambiguous=True,
-                    reason="no node near this arrowhead",
+                    reason=reason,
                 )
             )
-            continue
+            return
 
-        source, tail, steps, reason = _walk_to_source(strokes, nodes, head, target)
-        # Confidence is deliberately simple and explainable: a short walk to a single
-        # unambiguous source is trustworthy, a long one less so.
-        confidence = 0.0 if source is None else max(0.35, min(1.0, 1.0 - steps / 3000.0))
+        second_is_head, ink_first, ink_second, ratio = _direction_of(component, strokes, radius, first, second)
+        established = ratio >= MIN_DIRECTION_RATIO
+        if second_is_head:
+            src, tgt, src_point, tgt_point = source, target, first, second
+            src_ink, tgt_ink = ink_first, ink_second
+        else:
+            src, tgt, src_point, tgt_point = target, source, second, first
+            src_ink, tgt_ink = ink_second, ink_first
         edges.append(
             DetectedEdge(
                 edge_id=f"e{index}",
-                source_id=source.node_id if source else None,
-                target_id=target.node_id,
-                head=head,
-                tail=tail,
-                walk_length=steps,
-                arrowhead_area=area,
-                ambiguous=source is None,
-                reason=reason,
-                confidence=confidence,
+                source_id=nodes[src].node_id,
+                target_id=nodes[tgt].node_id,
+                source_point=(round(src_point[0]), round(src_point[1])),
+                target_point=(round(tgt_point[0]), round(tgt_point[1])),
+                resolved_by=resolved_by,
+                source_ink=src_ink,
+                target_ink=tgt_ink,
+                directed=established,
+                direction_ratio=min(ratio, 99.0),
+                ambiguous=False,
+                reason=""
+                if established
+                else (
+                    f"both ends carry a similar amount of ink ({ink_first} vs {ink_second}), so which end "
+                    f"has the arrowhead is not established"
+                ),
+                confidence=min(1.0, 0.5 + 0.1 * ratio) if established else 0.0,
             )
         )
+
+    for component_index in range(1, count):
+        if int(stats[component_index, cv2.CC_STAT_AREA]) < MIN_CONNECTOR_AREA:
+            continue
+        component = labels == component_index
+        touched = sorted({int(value) for value in np.unique(attachment[component]) if value >= 0})
+
+        if len(touched) == 0:
+            # Drawn, attached to nothing. Usually a glyph belonging to a node that was missed.
+            continue
+        if len(touched) == 1:
+            only = touched[0]
+            points = _contact_points(component, attachment, only)
+            add(
+                only,
+                None,
+                component,
+                points[0] if points else None,
+                None,
+                "component",
+                "this connector reaches only one node, so what it joins is not established",
+            )
+            continue
+        if len(touched) == 2:
+            first_points = _contact_points(component, attachment, touched[0])
+            second_points = _contact_points(component, attachment, touched[1])
+            if not first_points or not second_points:
+                continue
+            add(touched[0], touched[1], component, first_points[0], second_points[0], "component")
+            continue
+
+        # Three or more nodes: crossing or fanning curves. Follow each one.
+        free = component & (attachment < 0)
+        free_ys, free_xs = np.nonzero(free)
+        seen: set[tuple[int, int]] = set()
+        traced_any = False
+        for node_index in touched:
+            for contact in _contact_points(component, attachment, node_index):
+                if free_ys.size == 0:
+                    continue
+                # Step just outside the attachment band and head away from the node.
+                distances = (free_xs - contact[0]) ** 2 + (free_ys - contact[1]) ** 2
+                nearest = int(distances.argmin())
+                start = (float(free_xs[nearest]), float(free_ys[nearest]))
+                heading = np.array([start[0] - contact[0], start[1] - contact[1]])
+                norm = float(np.linalg.norm(heading))
+                if norm < 1e-6:
+                    continue
+                result = _trace_curve(bridged, attachment, start, heading / norm, node_index)
+                if result is None:
+                    continue
+                reached, arrival = result
+                key = (min(node_index, reached), max(node_index, reached))
+                if key in seen:
+                    continue
+                seen.add(key)
+                traced_any = True
+                other = _contact_points(component, attachment, reached)
+                far = min(other, key=lambda p: (p[0] - arrival[0]) ** 2 + (p[1] - arrival[1]) ** 2) if other else None
+                add(node_index, reached, component, contact, far, "trace")
+        if not traced_any:
+            names = ", ".join(nodes[i].node_id for i in touched)
+            points = _contact_points(component, attachment, touched[0])
+            add(
+                touched[0],
+                None,
+                component,
+                points[0] if points else None,
+                None,
+                "trace",
+                f"curves touching {names} cross here and none could be followed through",
+            )
+
     return edges
 
 
 # --------------------------------------------------------------------------- #
-# 7. Consistency validation
+# 6. Consistency validation
 # --------------------------------------------------------------------------- #
 
 
@@ -679,23 +974,25 @@ def validate(parse: DiagramParse) -> list[str]:
     if not parse.nodes:
         problems.append("no nodes were detected")
     if not parse.edges:
-        problems.append("no arrowheads were detected, so no direction is established")
+        problems.append("no connectors were detected, so nothing is joined")
 
     ambiguous = parse.ambiguous_edges
     if ambiguous:
-        problems.append(f"{len(ambiguous)} of {len(parse.edges)} arrows have no established source")
+        problems.append(f"{len(ambiguous)} of {len(parse.edges)} connectors do not have both ends established")
 
-    # An edge pointing at its own source is either a self-loop the renderer drew or a walk that
-    # went wrong. Either way it cannot route anything.
-    for edge in parse.confident_edges:
+    undirected = parse.undirected_only_edges
+    if undirected:
+        problems.append(f"{len(undirected)} connector(s) have no established direction")
+
+    for edge in parse.connected_edges:
         if edge.source_id == edge.target_id:
             problems.append(f"edge {edge.edge_id} starts and ends at {edge.target_id}")
 
-    # A node no arrow touches is suspicious: Mermaid charts connect what they draw.
-    touched = {edge.target_id for edge in parse.edges} | {edge.source_id for edge in parse.edges if edge.source_id}
+    # A node no connector touches is suspicious: Mermaid charts connect what they draw.
+    touched = {edge.target_id for edge in parse.edges} | {edge.source_id for edge in parse.edges}
     isolated = [node.node_id for node in parse.nodes if node.node_id not in touched]
     if isolated and len(isolated) < len(parse.nodes):
-        problems.append(f"{len(isolated)} node(s) touched by no arrow: {', '.join(isolated[:4])}")
+        problems.append(f"{len(isolated)} node(s) touched by no connector: {', '.join(isolated[:4])}")
 
     unnamed = [node.node_id for node in parse.nodes if not node.text.strip()]
     if unnamed:
@@ -710,7 +1007,7 @@ def validate(parse: DiagramParse) -> list[str]:
 
 
 def parse_diagram(image_path: Path, *, read_text: bool = True) -> DiagramParse:
-    """Recover nodes, arrows and directions from one flowchart image.
+    """Recover nodes, connectors and directions from one flowchart image.
 
     ``read_text`` runs OCR per node. It is the slowest stage by far, so it can be switched off
     when only the topology is being measured.
@@ -728,14 +1025,9 @@ def parse_diagram(image_path: Path, *, read_text: bool = True) -> DiagramParse:
 
     background = modal_background(image)
     nodes, threshold, opened = detect_nodes(image, background)
-    # Two different masks, for two different jobs. Arrowheads are found on the mask with node
-    # fills removed, or a node's own fill would survive the erosion and be counted as a head.
-    # The walk uses the full foreground, because deleting the nodes severs any curve routed
-    # close to a box - see _walk_to_source.
-    strokes = stroke_mask(image, background, nodes, threshold)
-    walkable = foreground_mask(image, background, threshold)
-    heads = detect_arrowheads(strokes)
-    edges = associate_edges(walkable, nodes, heads)
+    attachment = attachment_map(nodes, image.shape[:2])
+    strokes, bridged, stroke_threshold = stroke_layer(image, background, nodes, attachment)
+    edges = extract_edges(strokes, bridged, nodes, attachment)
 
     parse = DiagramParse(
         image_path=str(image_path),
@@ -743,9 +1035,10 @@ def parse_diagram(image_path: Path, *, read_text: bool = True) -> DiagramParse:
         height=int(image.shape[0]),
         background=tuple(int(v) for v in background),  # type: ignore[arg-type]
         threshold_used=threshold,
+        stroke_threshold=stroke_threshold,
         nodes=nodes,
         edges=edges,
-        masks={"nodes": opened, "strokes": strokes},
+        masks={"nodes": opened, "strokes": strokes, "bridged": bridged},
     )
 
     if read_text:
@@ -759,29 +1052,36 @@ def parse_diagram(image_path: Path, *, read_text: bool = True) -> DiagramParse:
         image=image_path.name,
         nodes=len(parse.nodes),
         edges=len(parse.edges),
-        confident=len(parse.confident_edges),
+        directed=len(parse.directed_edges),
         threshold=threshold,
+        stroke_threshold=stroke_threshold,
     )
     return parse
 
 
 __all__ = [
-    "ARROWHEAD_MIN_DENSITY",
-    "ARROWHEAD_WINDOW",
+    "ATTACH_GAP",
+    "BRIDGE_ANGLES",
+    "BRIDGE_LENGTH",
     "FOREGROUND_THRESHOLDS",
-    "MIN_ARROWHEAD_AREA",
+    "MIN_CONNECTOR_AREA",
+    "MIN_DIRECTION_RATIO",
+    "NODE_BLOCK_PAD",
     "NODE_OPEN_KERNEL",
-    "SOURCE_MARGIN_RATIO",
+    "STROKE_THRESHOLDS",
     "DetectedEdge",
     "DetectedNode",
     "DiagramParse",
     "NodeShape",
-    "associate_edges",
-    "detect_arrowheads",
+    "attachment_map",
+    "bridge_dashes",
     "detect_nodes",
+    "extract_edges",
     "foreground_mask",
     "modal_background",
+    "node_block",
+    "owner_map",
     "parse_diagram",
-    "stroke_mask",
+    "stroke_layer",
     "validate",
 ]

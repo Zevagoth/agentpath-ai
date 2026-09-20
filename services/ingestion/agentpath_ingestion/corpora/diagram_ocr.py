@@ -52,16 +52,43 @@ TESSERACT_TIMEOUT = 20.0
 #: a capital height of roughly 30-40 px on its own.
 OCR_UPSCALE = 3
 
+#: LSTM engine only, rather than tesseract's default of running the legacy engine as well and
+#: combining them. Measured on 132 dev crops: exact label equality rose from 64.4% to 85.6% and
+#: the call got *faster*, 65 ms against 88 ms. The legacy engine is trained on scanned documents
+#: and these are 30-pixel synthetic renderings; its vote was doing harm.
+TESSERACT_ENGINE = "1"
+
 #: Pixels trimmed from each side of a node crop before reading, so the border stroke is not
-#: mistaken for a glyph.
-BORDER_TRIM = 3
+#: mistaken for a glyph. Five, not three: the box comes from a threshold sweep that on
+#: low-contrast charts settles at 8 or 14 and reports a box a pixel or two larger than the node,
+#: which pulls the border inside the crop. Measured, with the edge-word rule below: 91.7% exact
+#: at a trim of 5 against 90.9% at 3.
+BORDER_TRIM = 5
 
-#: "One text line". These boxes hold a single short label, and the default block mode splits
-#: them into fragments.
-NODE_PSM = "7"
+#: "Uniform block of text", not "one text line". Counter-intuitive for a one-line label, but
+#: measured: psm 6 reads the words right on every one of 132 dev crops where psm 7 misses 4.5%.
+#: A Mermaid label wraps onto two lines when it is long, and psm 7 promises a single line.
+NODE_PSM = "6"
 
-#: Same, for the free-floating text beside an arrow.
+#: Same, for the free-floating text beside an arrow, which really is one short line.
 EDGE_LABEL_PSM = "7"
+
+#: A recognised word whose box touches the left or right edge of the crop, and which is at most
+#: this long, is the node's border stroke read as a glyph rather than a word.
+#:
+#: This is deliberately a test on the word's *position*, not on its text. Stripping short tokens
+#: from the ends of the reading would score the same on this corpus and would quietly destroy a
+#: real label like "Go to step 3"; dropping a word drawn on top of the border cannot.
+EDGE_WORD_MAX_LENGTH = 2
+
+#: How close to the crop edge counts as touching it, in upscaled pixels - so about 3 pixels of
+#: the original, which covers a 1-2 pixel border stroke and its anti-aliasing.
+EDGE_WORD_MARGIN = 10
+
+#: Words tesseract is this unsure of are not read at all. A glyph invented from a stroke scores
+#: far lower than a real word, and 50 sits in the gap. Measured: 95.5% exact with this and the
+#: edge rule together, against 91.7% with the edge rule alone.
+MIN_WORD_CONFIDENCE = 50.0
 
 #: How far from an arrow's midpoint to look for its label.
 EDGE_LABEL_RADIUS = 26
@@ -113,7 +140,7 @@ def _read(grey: np.ndarray, psm: str) -> tuple[str, float]:
         cv2.imwrite(str(source), binary)
         try:
             completed = subprocess.run(
-                [TESSERACT_BINARY, str(source), "stdout", "--psm", psm, "tsv"],
+                [TESSERACT_BINARY, str(source), "stdout", "--psm", psm, "--oem", TESSERACT_ENGINE, "tsv"],
                 capture_output=True,
                 text=True,
                 timeout=TESSERACT_TIMEOUT,
@@ -129,6 +156,7 @@ def _read(grey: np.ndarray, psm: str) -> tuple[str, float]:
         logger.warning("diagram_ocr.nonzero_exit", code=completed.returncode, detail=completed.stderr[:160])
         return "", 0.0
 
+    crop_width = binary.shape[1]
     words: list[str] = []
     confidences: list[float] = []
     reader = csv.DictReader(completed.stdout.splitlines(), delimiter="\t", quoting=csv.QUOTE_NONE)
@@ -136,13 +164,21 @@ def _read(grey: np.ndarray, psm: str) -> tuple[str, float]:
         text = (row.get("text") or "").strip()
         if not text:
             continue
-        words.append(text)
         try:
-            value = float(row.get("conf") or -1)
+            confidence = float(row.get("conf") or -1)
+            left = int(row.get("left") or 0)
+            width = int(row.get("width") or 0)
         except ValueError:
             continue
-        if value >= 0:
-            confidences.append(value / 100.0)
+        if confidence < MIN_WORD_CONFIDENCE:
+            # Not read, rather than read badly.
+            continue
+        touches_edge = left <= EDGE_WORD_MARGIN or left + width >= crop_width - EDGE_WORD_MARGIN
+        if touches_edge and len(text) <= EDGE_WORD_MAX_LENGTH:
+            # The node's own border, recognised as a glyph. See EDGE_WORD_MARGIN.
+            continue
+        words.append(text)
+        confidences.append(confidence / 100.0)
 
     joined = _WHITESPACE.sub(" ", " ".join(words)).strip()
     return _clean(joined), float(np.mean(confidences)) if confidences else 0.0
@@ -199,11 +235,11 @@ def read_edge_labels(image: np.ndarray, edges: list[DetectedEdge], nodes: list[D
 
     updated: list[DetectedEdge] = []
     for edge in edges:
-        if edge.tail is None:
+        if edge.source_point is None or edge.target_point is None:
             updated.append(edge)
             continue
-        mid_x = (edge.head[0] + edge.tail[0]) // 2
-        mid_y = (edge.head[1] + edge.tail[1]) // 2
+        mid_x = (edge.target_point[0] + edge.source_point[0]) // 2
+        mid_y = (edge.target_point[1] + edge.source_point[1]) // 2
         if any(node.contains(mid_x, mid_y) for node in nodes):
             updated.append(edge)
             continue
@@ -230,9 +266,13 @@ def read_edge_labels(image: np.ndarray, edges: list[DetectedEdge], nodes: list[D
 __all__ = [
     "BORDER_TRIM",
     "EDGE_LABEL_RADIUS",
+    "EDGE_WORD_MARGIN",
+    "EDGE_WORD_MAX_LENGTH",
     "MIN_TEXT_CONFIDENCE",
+    "MIN_WORD_CONFIDENCE",
     "NODE_PSM",
     "OCR_UPSCALE",
+    "TESSERACT_ENGINE",
     "read_edge_labels",
     "read_node_text",
 ]

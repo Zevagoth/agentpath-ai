@@ -1,12 +1,18 @@
 """Draw what the parser saw, so a human can check it against the original.
 
 This is the deliverable that makes the rest auditable. Every claim the parser makes is drawn on
-top of the image it came from: the node boundary it found, the text it read, each arrowhead, the
-direction it inferred, the source it walked back to, and the confidence.
+top of the image it came from: the node boundary it found, the text it read, each connector, which
+end carries the arrowhead, how that was decided, and how it was resolved.
 
-Ambiguity is drawn differently from confidence on purpose. An edge whose source could not be
-established is dashed and red, so a reviewer's eye goes to the thing that needs judgement rather
-than to the 90% that is fine.
+Three outcomes are drawn differently on purpose, because they need different judgement:
+
+* **orange, solid, with an arrow** - both ends and the direction established.
+* **blue, solid, no arrow** - the two nodes are connected, but which end carries the arrowhead
+  could not be measured. The adjacency is real; the direction is not claimed.
+* **red, dashed** - the connector was found but what it joins was not established.
+
+Traced edges are marked ``~`` because they came out of a crossing and deserve a closer look than
+a connector that was its own component.
 """
 
 from __future__ import annotations
@@ -22,9 +28,16 @@ from agentpath_ingestion.corpora.diagram import DiagramParse
 #: near-black, which is why everything is drawn with a contrasting outline as well as a fill.
 NODE_COLOUR = (0, 200, 0)
 NODE_TEXT_COLOUR = (0, 120, 0)
-EDGE_COLOUR = (255, 140, 0)
+#: Orange. Written as BGR, which is the order OpenCV takes: (0, 165, 255) is orange and
+#: (255, 165, 0) is azure. Worth stating because the earlier version had them the wrong way round,
+#: so "orange=directed" in the legend drew blue and directed edges were indistinguishable from
+#: undirected ones - the overlay was quietly useless for the one thing it existed to show.
+DIRECTED_COLOUR = (0, 165, 255)
+#: Purple, chosen to be unmistakable against orange rather than a shade of it.
+UNDIRECTED_COLOUR = (200, 0, 200)
 AMBIGUOUS_COLOUR = (0, 0, 255)
 HEAD_COLOUR = (0, 215, 255)
+TAIL_COLOUR = (180, 180, 180)
 PANEL_BG = (20, 20, 20)
 PANEL_FG = (240, 240, 240)
 
@@ -32,7 +45,7 @@ PANEL_FG = (240, 240, 240)
 SCALE = 2
 
 #: Height of the summary strip along the bottom.
-PANEL_HEIGHT = 96
+PANEL_HEIGHT = 118
 
 
 def _put(
@@ -50,7 +63,7 @@ def _dashed_line(
     colour: tuple[int, int, int],
     dash: int = 8,
 ) -> None:
-    """A dashed segment, used only for edges whose source is not established."""
+    """A dashed segment, used only for connectors whose ends are not established."""
     x1, y1 = start
     x2, y2 = end
     length = int(np.hypot(x2 - x1, y2 - y1))
@@ -76,59 +89,69 @@ def render_overlay(parse: DiagramParse, image_path: Path | None = None) -> np.nd
     # is still comparable to the real thing.
     canvas = cv2.addWeighted(canvas, 0.55, np.full_like(canvas, 255), 0.45, 0)
 
-    by_id = {node.node_id: node for node in parse.nodes}
-
     for node in parse.nodes:
         x, y = node.x * SCALE, node.y * SCALE
         w, h = node.width * SCALE, node.height * SCALE
         cv2.rectangle(canvas, (x, y), (x + w, y + h), NODE_COLOUR, 2, cv2.LINE_AA)
-        label = f"{node.node_id} [{node.shape.value[:4]}]"
-        _put(canvas, label, (x + 2, max(y - 4, 10)), NODE_COLOUR, 0.42)
+        _put(canvas, f"{node.node_id} [{node.shape.value[:4]}]", (x + 2, max(y - 4, 10)), NODE_COLOUR, 0.42)
         if node.text:
             confidence = f" {node.text_confidence:.2f}" if node.text_confidence else ""
             _put(canvas, f'"{node.text[:30]}"{confidence}', (x + 2, y + h + 14), NODE_TEXT_COLOUR, 0.38)
 
     for edge in parse.edges:
-        head = (edge.head[0] * SCALE, edge.head[1] * SCALE)
-        ambiguous = edge.ambiguous or not edge.source_id
-        colour = AMBIGUOUS_COLOUR if ambiguous else EDGE_COLOUR
+        if edge.ambiguous or not (edge.source_id and edge.target_id):
+            colour = AMBIGUOUS_COLOUR
+        elif edge.directed:
+            colour = DIRECTED_COLOUR
+        else:
+            colour = UNDIRECTED_COLOUR
 
-        # The arrowhead itself: a filled circle, because its position is the direct evidence for
-        # the edge's existence and for which end is the head.
-        cv2.circle(canvas, head, 6, HEAD_COLOUR, -1, cv2.LINE_AA)
-        cv2.circle(canvas, head, 6, (0, 0, 0), 1, cv2.LINE_AA)
+        tail = (edge.source_point[0] * SCALE, edge.source_point[1] * SCALE) if edge.source_point else None
+        head = (edge.target_point[0] * SCALE, edge.target_point[1] * SCALE) if edge.target_point else None
 
-        if edge.tail is not None:
-            tail = (edge.tail[0] * SCALE, edge.tail[1] * SCALE)
-            if ambiguous:
+        if head is not None:
+            # The head end is the direct evidence for the direction, so it is marked distinctly.
+            cv2.circle(canvas, head, 6, HEAD_COLOUR if edge.directed else colour, -1, cv2.LINE_AA)
+            cv2.circle(canvas, head, 6, (0, 0, 0), 1, cv2.LINE_AA)
+        if tail is not None:
+            cv2.circle(canvas, tail, 4, TAIL_COLOUR, -1, cv2.LINE_AA)
+            cv2.circle(canvas, tail, 4, (0, 0, 0), 1, cv2.LINE_AA)
+
+        if tail is not None and head is not None:
+            if edge.ambiguous:
                 _dashed_line(canvas, tail, head, colour)
-            else:
+            elif edge.directed:
                 cv2.arrowedLine(canvas, tail, head, colour, 2, cv2.LINE_AA, tipLength=0.08)
+            else:
+                cv2.line(canvas, tail, head, colour, 2, cv2.LINE_AA)
 
-        source_node = by_id.get(edge.source_id or "")
-        target_node = by_id.get(edge.target_id)
-        description = (
-            f"{edge.edge_id}: {source_node.node_id if source_node else '?'}"
-            f"->{target_node.node_id if target_node else '?'}"
-        )
+        anchor = head or tail
+        if anchor is None:
+            continue
+        mark = "~" if edge.resolved_by == "trace" else ""
+        description = f"{edge.edge_id}{mark}: {edge.source_id or '?'}->{edge.target_id or '?'}"
         if edge.label:
             description += f" [{edge.label}]"
-        if not ambiguous:
-            description += f" c={edge.confidence:.2f}"
-        _put(canvas, description, (head[0] + 9, head[1] - 6), colour, 0.38)
+        if edge.source_id and edge.target_id:
+            description += f" ink {edge.source_ink}/{edge.target_ink}"
+            description += f" x{edge.direction_ratio:.2f}" if edge.directed else " UNDIRECTED"
+        _put(canvas, description, (anchor[0] + 9, anchor[1] - 6), colour, 0.38)
 
     panel = np.full((PANEL_HEIGHT, canvas.shape[1], 3), PANEL_BG, dtype=np.uint8)
+    traced = sum(1 for edge in parse.edges if edge.resolved_by == "trace")
     lines = [
-        f"{source.name}   {parse.width}x{parse.height}   bg={parse.background}   threshold={parse.threshold_used}",
-        f"nodes={parse.node_count}   arrows={parse.edge_count}   "
-        f"confident={len(parse.confident_edges)}   ambiguous={len(parse.ambiguous_edges)}   "
-        f"branch nodes={len(parse.branch_node_ids)}",
-        "green=node  orange=directed arrow  RED DASHED=source not established  yellow dot=arrowhead",
+        f"{source.name}   {parse.width}x{parse.height}   bg={parse.background}   "
+        f"node threshold={parse.threshold_used}   stroke threshold={parse.stroke_threshold}",
+        f"nodes={parse.node_count}   connectors={parse.edge_count}   directed={len(parse.directed_edges)}   "
+        f"undirected={len(parse.undirected_only_edges)}   unresolved={len(parse.ambiguous_edges)}   "
+        f"traced={traced}   branch nodes={len(parse.branch_node_ids)}",
+        "green=node   orange+arrow=direction established   purple=connected, direction not established",
+        "RED DASHED=ends not established   yellow dot=arrowhead end   grey dot=tail end   ~=traced out of a crossing",
     ]
     if parse.problems:
-        lines.append("problems: " + "; ".join(parse.problems)[: canvas.shape[1] // 7])
-    for index, line in enumerate(lines[:4]):
-        cv2.putText(panel, line, (8, 20 + index * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, PANEL_FG, 1, cv2.LINE_AA)
+        lines.append("problems: " + "; ".join(parse.problems)[: max(canvas.shape[1] // 7, 40)])
+    for index, line in enumerate(lines[:5]):
+        cv2.putText(panel, line, (8, 18 + index * 21), cv2.FONT_HERSHEY_SIMPLEX, 0.40, PANEL_FG, 1, cv2.LINE_AA)
 
     return np.vstack([canvas, panel])
 
