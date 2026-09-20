@@ -357,7 +357,14 @@ def create_app(settings: Settings | None = None, context: ServiceContext | None 
             limit=payload.limit,
             image_limit=payload.image_limit,
         )
-        return CorpusSearchResponse.from_result(result, service)
+        # Built after the search, not inside it, so the retrieval timings stay about
+        # retrieval. Assembling it is dictionary lookups over data already in memory.
+        gallery = (
+            service.gallery_for(result, page=payload.gallery_page, page_size=payload.gallery_page_size)
+            if payload.include_gallery
+            else None
+        )
+        return CorpusSearchResponse.from_result(result, service, gallery)
 
     @app.get(
         SCREENSHOT_URL_PREFIX + "/{screenshot_id}",

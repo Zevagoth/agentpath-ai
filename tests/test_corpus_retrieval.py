@@ -1302,8 +1302,20 @@ async def test_there_is_no_parameter_that_names_a_dataset(corpus: Corpus, settin
 
     fields = set(CorpusSearchRequest.model_fields)
 
-    assert fields == {"corpus_id", "question", "method", "limit", "image_limit"}
-    assert not any("dataset" in field for field in fields)
+    # Pinned deliberately: this test failing when a field is added is the point. A new
+    # field is fine, a field that lets a caller reach past corpus_id to the index behind
+    # it is not.
+    assert fields == {
+        "corpus_id",
+        "question",
+        "method",
+        "limit",
+        "image_limit",
+        "include_gallery",
+        "gallery_page",
+        "gallery_page_size",
+    }
+    assert not any("dataset" in field or "index" in field for field in fields)
 
 
 async def test_a_passage_reports_how_its_offsets_were_established(corpus: Corpus, settings: Settings) -> None:

@@ -30,6 +30,8 @@ import structlog
 
 from agentpath.config import Settings
 from agentpath.corpus import Corpus, dataset_name_for
+from agentpath.corpus_retrieval.gallery import DEFAULT_PAGE_SIZE as GALLERY_PAGE_SIZE
+from agentpath.corpus_retrieval.gallery import Gallery, build_gallery
 from agentpath.corpus_retrieval.hybrid import HybridCorpusRetriever
 from agentpath.corpus_retrieval.images import ContextWindowImageSelector, DocumentOrderImageSelector
 from agentpath.corpus_retrieval.lexical import LexicalCorpusRetriever
@@ -95,6 +97,29 @@ class CorpusSearchService:
     @property
     def image_strategy(self) -> str:
         return self._images.strategy
+
+    def gallery_for(
+        self,
+        result: CorpusRetrievalResult,
+        *,
+        page: int = 1,
+        page_size: int = GALLERY_PAGE_SIZE,
+    ) -> Gallery:
+        """Every figure of the retrieved documents, in order, nothing filtered.
+
+        Separate from :meth:`search` rather than folded into it, because the two answer
+        different questions and are measured against different targets: the ranked
+        selection is scored on precision and recall, the gallery on completeness. Keeping
+        the gallery out of the search call also keeps the retrieval latency figures about
+        retrieval.
+        """
+        return build_gallery(
+            self._corpus,
+            result.documents,
+            selected_image_ids=result.image_ids,
+            page=page,
+            page_size=page_size,
+        )
 
     async def search(
         self,

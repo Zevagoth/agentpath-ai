@@ -29,6 +29,7 @@ from agentpath_ingestion.corpora.export import export_bundle
 from agentpath_ingestion.corpora.mramg import CORPUS_ID as MRAMG_ID
 from agentpath_ingestion.corpora.mramg import MramgManualAdapter
 from agentpath_ingestion.corpora.mramg import default_root as mramg_root
+from agentpath_ingestion.corpora.roles import VisionClassifier, classify_bundle, write_roles
 from agentpath_ingestion.dataset import repo_root
 
 #: Corpus id to a factory. The synthetic procedures are deliberately absent: they
@@ -264,16 +265,76 @@ def command_split(adapter: CorpusAdapter, args: argparse.Namespace) -> int:
     return 0
 
 
+def command_roles(adapter: CorpusAdapter, args: argparse.Namespace) -> int:
+    """Classify every image's role and write ``roles.jsonl`` into the bundle.
+
+    The vision model runs only on prefilter candidates, because that is the only decision
+    its answer changes: a UI screenshot and an "other" figure are displayed identically, so
+    paying 2,599 model calls to separate them would spend an hour to change nothing.
+    Everything else is recorded as ``other`` with a warning that nothing examined it.
+    """
+    bundle = adapter.load()
+    build_dir = BUILD_DIRS[bundle.corpus_id](repo_root())
+    images_root = IMAGE_DIRS[bundle.corpus_id](repo_root())
+
+    classifier = None if args.no_vision else VisionClassifier(model=args.vision_model)
+    if classifier is not None:
+        ok, detail = classifier.available()
+        print(f"vision model: {detail}")
+        if not ok:
+            print("  refusing to guess roles without a vision model; re-run with --no-vision", file=sys.stderr)
+            return 1
+
+    report = classify_bundle(bundle, images_root=images_root, classifier=classifier)
+    path = write_roles(report, build_dir)
+
+    print(f"corpus    : {report.corpus_id}")
+    print(f"written   : {path}")
+    print(f"images    : {len(report.records):,}")
+    print(f"candidates: {report.candidates:,} sent to the model")
+    print(f"examined  : {report.examined:,} answered")
+    print(f"seconds   : {report.seconds}")
+    print()
+    print(f"{'role':<20} {'count':>7}")
+    for role, count in report.counts.items():
+        print(f"{role:<20} {count:>7,}")
+
+    workflows = report.workflows
+    print(f"\nworkflow diagrams found: {len(workflows)}")
+    for record in workflows:
+        print(f"  {record.image_id:<24} conf {record.confidence:.2f}  {record.reason[:70]}")
+
+    warned = [record for record in report.records if record.warnings and record.examined]
+    if warned:
+        print(f"\nexamined images with warnings: {len(warned)}")
+        for record in warned[:10]:
+            print(f"  {record.image_id:<24} {record.warnings[0][:90]}")
+
+    for problem in report.problems:
+        print(f"\nproblem: {problem}", file=sys.stderr)
+    return 0 if not report.problems else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "command",
-        choices=("fetch", "export", "ingest", "inspect", "split"),
+        choices=("fetch", "export", "ingest", "inspect", "split", "roles"),
         help=(
             "fetch: download the raw artefacts. export: write the bundle the API "
             "reads. ingest: index into RAGFlow. inspect: report what is on disk. "
-            "split: write the committed dev / held-out split."
+            "split: write the committed dev / held-out split. roles: classify image roles."
         ),
+    )
+    parser.add_argument(
+        "--no-vision",
+        action="store_true",
+        help="With roles: skip the vision model. Every image is recorded as unexamined.",
+    )
+    parser.add_argument(
+        "--vision-model",
+        default="qwen3.5:4b",
+        help="With roles: the Ollama vision model to use.",
     )
     parser.add_argument(
         "--delete",
@@ -300,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
         "ingest": command_ingest,
         "inspect": command_inspect,
         "split": command_split,
+        "roles": command_roles,
     }
     return handlers[args.command](adapter, args)
 

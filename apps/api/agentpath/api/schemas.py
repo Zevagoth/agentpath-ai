@@ -21,6 +21,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentpath.case_context import CaseContext
+from agentpath.corpus_retrieval.gallery import Gallery
 from agentpath.corpus_retrieval.ports import CorpusRetrievalResult, OffsetSource, RetrievalMethod
 from agentpath.corpus_retrieval.service import CorpusSearchService
 from agentpath.domain import EvidenceLevel, Language, ProcedureHit, RetrievalMode, SearchResult
@@ -752,6 +753,17 @@ class CorpusSearchRequest(BaseModel):
     )
     limit: int = Field(default=3, ge=1, le=10, description="How many documents to return.")
     image_limit: int = Field(default=5, ge=0, le=20, description="How many images to return. Zero disables images.")
+    include_gallery: bool = Field(
+        default=True,
+        description=(
+            "Include every figure of the retrieved documents, in order, unfiltered. This is what a "
+            "reader should be shown; `images` is the ranked guess at which one the question is about."
+        ),
+    )
+    gallery_page: int = Field(default=1, ge=1, le=100, description="Which page of each document's figures.")
+    gallery_page_size: int = Field(
+        default=24, ge=1, le=200, description="Figures per document per page. Paginates; never filters."
+    )
 
 
 class CorpusPassageOut(BaseModel):
@@ -825,7 +837,20 @@ class CorpusSearchResponse(BaseModel):
     image_retrieval_mode: str
     question: str
     documents: list[CorpusDocumentOut]
-    images: list[CorpusImageOut]
+    images: list[CorpusImageOut] = Field(
+        default_factory=list,
+        description=(
+            "The ranked selection: which figure the question appears to be about. May be empty. "
+            "This is what Image Recall is measured on, and it is NOT the set to render for a reader."
+        ),
+    )
+    gallery: GalleryOut | None = Field(
+        default=None,
+        description=(
+            "Every figure of the retrieved documents, in document order, filtered by nothing. "
+            "Null only when the caller asked for it to be omitted."
+        ),
+    )
     timings_ms: dict[str, float]
     problems: list[str] = Field(
         default_factory=list,
@@ -834,7 +859,12 @@ class CorpusSearchResponse(BaseModel):
     diagnostics: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
-    def from_result(cls, result: CorpusRetrievalResult, service: CorpusSearchService) -> CorpusSearchResponse:
+    def from_result(
+        cls,
+        result: CorpusRetrievalResult,
+        service: CorpusSearchService,
+        gallery: Gallery | None = None,
+    ) -> CorpusSearchResponse:
         corpus = service.corpus
         documents: list[CorpusDocumentOut] = []
         for hit in result.documents:
@@ -899,6 +929,7 @@ class CorpusSearchResponse(BaseModel):
             question=result.question,
             documents=documents,
             images=images,
+            gallery=GalleryOut.from_gallery(gallery) if gallery is not None else None,
             timings_ms={
                 "retrieval": round(result.retrieval_ms, 2),
                 "image_selection": round(result.image_selection_ms, 2),
@@ -906,4 +937,116 @@ class CorpusSearchResponse(BaseModel):
             },
             problems=list(result.problems),
             diagnostics=dict(result.diagnostics),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# The gallery: every figure of the retrieved documents, nothing hidden
+#
+# Separate from `CorpusSearchResponse.images` on purpose. That field is the ranked
+# *selection* - which figure does this question appear to be about - and it is what Image
+# Recall is measured on. This is the complete set, in document order, and its recall is
+# 1.0 by construction. Returning only the selection was the design mistake the Stage 2B1
+# evaluation exposed: ranking discarded a correct figure from an already-correct document
+# for 74 of the 87 held-out questions that scored zero.
+# --------------------------------------------------------------------------- #
+
+
+class GalleryImageOut(BaseModel):
+    """One figure in the gallery, with its position and what is known about its kind.
+
+    ``role_method`` matters more than ``role``. ``prefilter`` means *no model examined this
+    image*, which is not the same claim as "a model checked and it is not a diagram". A UI
+    that renders a role badge without that distinction is overstating what is known.
+    """
+
+    image_id: str
+    document_id: str
+    position_index: int = Field(description="0-based ordinal among the document's figures. The display order.")
+    char_offset: int = Field(description="Where the figure belongs in the document's own text.")
+    url: str
+    source_url: str | None = Field(default=None, description="Upstream original, or null when the corpus has none.")
+    caption: str | None = None
+    role: Literal["workflow_diagram", "ui_screenshot", "other"] = "other"
+    role_method: Literal["corpus_metadata", "vision_model", "prefilter"] = "prefilter"
+    role_confidence: float = 0.0
+    passage_id: str | None = Field(default=None, description="Passage whose span contains this figure, when one does.")
+    section: str | None = Field(default=None, description="That passage's heading. The nearest thing to a step label.")
+    in_matched_passage: bool = Field(
+        default=False, description="True when the retrieval matched the passage this figure sits in."
+    )
+    selected: bool = Field(default=False, description="True when the ranked selection also chose this figure.")
+
+
+class DocumentGalleryOut(BaseModel):
+    """Every figure of one document, in order, paginated but never filtered."""
+
+    document_id: str
+    title: str
+    rank: int
+    total: int = Field(description="Figures in this document, regardless of what this page holds.")
+    page: int
+    page_size: int
+    pages: int
+    truncated: bool = Field(description="True when this page shows fewer than `total`. Request a later page.")
+    ordered: bool = Field(description="Whether this page is in document order. Always true; asserted, not assumed.")
+    images: list[GalleryImageOut] = Field(default_factory=list)
+
+
+class GalleryOut(BaseModel):
+    """The complete figure set for one search.
+
+    ``omitted_by_cap`` is the only way a figure can be missing, and it is a response-size
+    guard rather than a relevance judgement - the count is reported so it can never be
+    mistaken for filtering.
+    """
+
+    corpus_id: str
+    documents: list[DocumentGalleryOut] = Field(default_factory=list)
+    total_images: int
+    shown_images: int
+    omitted_by_cap: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def from_gallery(cls, gallery: Gallery) -> GalleryOut:
+        return cls(
+            corpus_id=gallery.corpus_id,
+            documents=[
+                DocumentGalleryOut(
+                    document_id=item.document_id,
+                    title=item.title,
+                    rank=item.rank,
+                    total=item.total,
+                    page=item.page,
+                    page_size=item.page_size,
+                    pages=item.pages,
+                    truncated=item.truncated,
+                    ordered=item.ordered,
+                    images=[
+                        GalleryImageOut(
+                            image_id=image.image_id,
+                            document_id=image.document_id,
+                            position_index=image.position_index,
+                            char_offset=image.char_offset,
+                            url=image.url,
+                            source_url=image.provenance.source_url,
+                            caption=image.caption,
+                            role=image.role,  # type: ignore[arg-type]
+                            role_method=image.role_method,  # type: ignore[arg-type]
+                            role_confidence=round(image.role_confidence, 3),
+                            passage_id=image.passage_id,
+                            section=image.section,
+                            in_matched_passage=image.in_matched_passage,
+                            selected=image.selected,
+                        )
+                        for image in item.images
+                    ],
+                )
+                for item in gallery.documents
+            ],
+            total_images=gallery.total_images,
+            shown_images=gallery.shown_images,
+            omitted_by_cap=gallery.omitted_by_cap,
+            warnings=list(gallery.warnings),
         )

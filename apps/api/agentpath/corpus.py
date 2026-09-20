@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import structlog
@@ -59,6 +59,14 @@ MANIFEST_NAME = "manifest.json"
 DOCUMENTS_NAME = "documents.jsonl"
 CHUNKS_NAME = "chunks.jsonl"
 QUESTIONS_NAME = "questions.jsonl"
+
+#: Optional. Written by ``agentpath_ingestion.corpora.roles``; absent for a corpus nobody
+#: has classified, in which case every image keeps the ``other`` default.
+ROLES_NAME = "roles.jsonl"
+
+#: Roles the reader understands. Anything else in the file is recorded as a problem and
+#: the image keeps its default, rather than an unknown string reaching the UI.
+KNOWN_IMAGE_ROLES = frozenset({"workflow_diagram", "ui_screenshot", "other"})
 
 #: Refuse an implausibly large export rather than reading it into memory. The
 #: Manual bundle's documents file is 1.7 MiB.
@@ -129,10 +137,30 @@ class CorpusImageRecord:
     media_type: str
     source_url: str | None = None
     caption: str | None = None
+    #: What kind of figure this is, from ``roles.jsonl`` when the corpus has been
+    #: classified. Defaults to ``other`` so a corpus with no role file behaves exactly as
+    #: before: every image is shown in document order, which is the right default for
+    #: everything except a decision diagram.
+    role: str = "other"
+    #: How the role was decided - ``corpus_metadata``, ``vision_model`` or ``prefilter``.
+    #: ``prefilter`` means *nothing looked at this image*, which is not the same claim as
+    #: "a model checked and it is not a diagram". Surfaced so the UI cannot overstate it.
+    role_method: str = "prefilter"
+    role_confidence: float = 0.0
+    role_reason: str = ""
 
     @property
     def served_url(self) -> str:
         return f"/api/corpus-images/{self.corpus_id}/{self.image_id}"
+
+    @property
+    def is_workflow_diagram(self) -> bool:
+        return self.role == "workflow_diagram"
+
+    @property
+    def role_examined(self) -> bool:
+        """Whether a model or the corpus itself decided this, rather than nothing."""
+        return self.role_method != "prefilter"
 
     def provenance(self) -> ImageProvenance:
         return build_image_provenance(
@@ -244,10 +272,34 @@ class Corpus:
         return self.images.get(checked) if checked else None
 
     def images_for(self, document_id: str) -> tuple[CorpusImageRecord, ...]:
+        """This document's figures, each once, in the order a reader meets them.
+
+        Sorted on ``position_index`` and deduplicated rather than returned in the
+        document's raw slot order, because five MRAMG-Manual documents place the *same*
+        image id at two different ``<PIC>`` slots - 2,607 slots against 2,599 distinct
+        ids. The registry holds one record per id, carrying its first position, so walking
+        the raw slot list yields that record a second time with a position that has already
+        been passed and the sequence runs backwards. Measured: 4 of 40 documents.
+
+        A figure reused twice is therefore shown once, at its first position. The
+        alternative - one entry per slot - would need a per-slot offset the bundle does not
+        export, and would show a reader the same picture twice without being able to say
+        the second occurrence sits somewhere else.
+        """
         document = self.document(document_id)
         if document is None:
             return ()
-        return tuple(record for image_id in document.image_ids if (record := self.images.get(image_id)))
+        seen: set[str] = set()
+        records: list[CorpusImageRecord] = []
+        for image_id in document.image_ids:
+            if image_id in seen:
+                continue
+            record = self.images.get(image_id)
+            if record is None:
+                continue
+            seen.add(image_id)
+            records.append(record)
+        return tuple(sorted(records, key=lambda item: (item.position_index, item.image_id)))
 
     # -- what a caption-less image offers ----------------------------------- #
 
@@ -535,6 +587,13 @@ def _load_one(bundle: Path) -> tuple[Corpus | None, list[str]]:
     if not documents:
         return None, [*problems, f"corpus {corpus_id}: no usable documents"]
 
+    # Roles are optional: a bundle exported before classification, or a corpus nobody has
+    # classified, simply leaves every image at the "other" default. Absence is not a
+    # problem to report, because the display path does not depend on it.
+    roles_path = bundle / ROLES_NAME
+    if roles_path.is_file():
+        images = _apply_roles(roles_path, images, corpus_id, problems)
+
     corpus = Corpus(
         corpus_id=corpus_id,
         title=str(manifest.get("title") or corpus_id),
@@ -614,6 +673,43 @@ def _image_record(
         source_url=entry.get("source_url") if isinstance(entry.get("source_url"), str) else None,
         caption=entry.get("caption") if isinstance(entry.get("caption"), str) else None,
     )
+
+
+def _apply_roles(
+    path: Path,
+    images: dict[str, CorpusImageRecord],
+    corpus_id: str,
+    problems: list[str],
+) -> dict[str, CorpusImageRecord]:
+    """Overlay ``roles.jsonl`` onto the image registry.
+
+    An overlay rather than a source: the registry is built from the documents, so a role
+    file naming an image the corpus does not have is a stale file, not a new image. That
+    is reported and ignored - inventing an image from a role row would create one the
+    route cannot serve.
+    """
+    applied = 0
+    for row in _read_jsonl(path):
+        image_id = str(row.get("image_id") or "")
+        record = images.get(image_id)
+        if record is None:
+            problems.append(f"corpus {corpus_id}: roles name image {image_id!r}, which the documents do not")
+            continue
+        role = str(row.get("role") or "other")
+        if role not in KNOWN_IMAGE_ROLES:
+            problems.append(f"corpus {corpus_id}: image {image_id!r} has unknown role {role!r}; left as other")
+            role = "other"
+        confidence = row.get("confidence")
+        images[image_id] = replace(
+            record,
+            role=role,
+            role_method=str(row.get("method") or "prefilter"),
+            role_confidence=float(confidence) if isinstance(confidence, int | float) else 0.0,
+            role_reason=str(row.get("reason") or ""),
+        )
+        applied += 1
+    logger.info("corpus.roles_applied", corpus=corpus_id, images=applied)
+    return images
 
 
 def _read_jsonl(path: Path) -> Iterator[dict[str, object]]:
