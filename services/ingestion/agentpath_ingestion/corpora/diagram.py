@@ -257,6 +257,9 @@ class DiagramParse:
     stroke_threshold: int = 0
     nodes: list[DetectedNode] = field(default_factory=list)
     edges: list[DetectedEdge] = field(default_factory=list)
+    #: Per node, how many places a connector was seen to attach. Independent of the edge list, and
+    #: compared against it to detect a connector that was observed but never resolved.
+    port_counts: dict[str, int] = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)
     #: Kept for the overlay and for tests; not serialised.
     masks: dict[str, np.ndarray] = field(default_factory=dict, repr=False)
@@ -305,6 +308,54 @@ class DiagramParse:
         established the order carries no claim and only the adjacency should be read from it.
         """
         return self._as_labels(self.connected_edges)
+
+    @property
+    def unaccounted_ports(self) -> dict[str, int]:
+        """Per node, attachments seen on it minus edge ends resolved at it.
+
+        A positive number is a connector that was observed attaching to this node and never
+        resolved into an edge - a missing edge, detected without ground truth. Negative numbers are
+        not reported: they mean an edge end was counted at a node whose attachment merged with
+        another, which loses nothing.
+        """
+        resolved: dict[str, int] = {}
+        for edge in self.edges:
+            for node_id in (edge.source_id, edge.target_id):
+                if node_id:
+                    resolved[node_id] = resolved.get(node_id, 0) + 1
+        gaps = {}
+        for node_id, seen in self.port_counts.items():
+            shortfall = seen - resolved.get(node_id, 0)
+            if shortfall > 0:
+                gaps[node_id] = shortfall
+        return gaps
+
+    @property
+    def has_cycle(self) -> bool:
+        """Whether the established edges contain a directed cycle.
+
+        Not a fault. 46% of dev charts contain one, and a chart with no zero-in-degree node always
+        has a cycle - measured, 42 such charts and not one of them acyclic. So a missing start node
+        is evidence of a loop, not of a broken parse, and the two must not be confused.
+        """
+        outgoing: dict[str, list[str]] = {}
+        for edge in self.directed_edges:
+            if edge.source_id and edge.target_id:
+                outgoing.setdefault(edge.source_id, []).append(edge.target_id)
+        state: dict[str, int] = {}
+
+        def visit(node_id: str) -> bool:
+            state[node_id] = 1
+            for neighbour in outgoing.get(node_id, ()):
+                mark = state.get(neighbour, 0)
+                if mark == 1:
+                    return True
+                if mark == 0 and visit(neighbour):
+                    return True
+            state[node_id] = 2
+            return False
+
+        return any(state.get(node.node_id, 0) == 0 and visit(node.node_id) for node in self.nodes)
 
     @property
     def branch_node_ids(self) -> list[str]:
@@ -819,13 +870,19 @@ def extract_edges(
     bridged: np.ndarray,
     nodes: list[DetectedNode],
     attachment: np.ndarray,
-) -> list[DetectedEdge]:
-    """Turn the connector layer into edges, recording how each one was established."""
+) -> tuple[list[DetectedEdge], dict[str, int]]:
+    """Turn the connector layer into edges, recording how each one was established.
+
+    Also returns, per node, how many places a connector was seen to attach to it. That count is
+    independent evidence: a node with four attachments but three established edges has lost one,
+    and saying so is what lets the parse refuse itself without any ground truth.
+    """
     if not nodes:
-        return []
+        return [], {}
     radius = max(8, round(DIRECTION_RADIUS_RATIO * float(np.median([node.height for node in nodes]))))
     count, labels, stats, _centroids = cv2.connectedComponentsWithStats(bridged, connectivity=8)
     edges: list[DetectedEdge] = []
+    port_counts: dict[str, int] = {}
 
     def add(
         source: int | None,
@@ -893,70 +950,88 @@ def extract_edges(
         if len(touched) == 0:
             # Drawn, attached to nothing. Usually a glyph belonging to a node that was missed.
             continue
+
+        # How many places this component attaches to a node. Each attachment is one end of one
+        # connector, so a component with two of them carries one connector and a component with
+        # more carries more - whatever number of *nodes* it happens to touch.
+        #
+        # This matters much more than it looks. 36% of dev charts draw a reciprocal pair, one arrow
+        # each way between the same two nodes, and the two curves run close enough together that
+        # bridging often merges them into a single component touching two nodes. Reading only the
+        # first attachment per node reported one connector there and silently lost the other.
+        ports: list[tuple[int, tuple[float, float]]] = []
+        for node_index in touched:
+            for point in _contact_points(component, attachment, node_index):
+                ports.append((node_index, point))
+        for node_index, _point in ports:
+            port_counts[nodes[node_index].node_id] = port_counts.get(nodes[node_index].node_id, 0) + 1
+
         if len(touched) == 1:
             only = touched[0]
-            points = _contact_points(component, attachment, only)
             add(
                 only,
                 None,
                 component,
-                points[0] if points else None,
+                ports[0][1] if ports else None,
                 None,
                 "component",
                 "this connector reaches only one node, so what it joins is not established",
             )
             continue
-        if len(touched) == 2:
-            first_points = _contact_points(component, attachment, touched[0])
-            second_points = _contact_points(component, attachment, touched[1])
-            if not first_points or not second_points:
-                continue
-            add(touched[0], touched[1], component, first_points[0], second_points[0], "component")
+        if len(ports) == 2 and len(touched) == 2:
+            # One connector, unambiguously. No inference needed and none made.
+            add(touched[0], touched[1], component, ports[0][1], ports[1][1], "component")
             continue
 
-        # Three or more nodes: crossing or fanning curves. Follow each one.
+        # More attachments than one connector can account for: curves that cross, fan out from one
+        # node, or run alongside each other. Follow each one.
         free = component & (attachment < 0)
         free_ys, free_xs = np.nonzero(free)
-        seen: set[tuple[int, int]] = set()
+        # Keyed by the pair of *attachment points*, not the pair of nodes. Two connectors can join
+        # the same two nodes - "no? go back and retry" draws one arrow each way - and keying by node
+        # would collapse them into one edge and lose a real branch of the workflow. Keying by point
+        # still collapses the duplicate that arises from tracing the same curve from both of its
+        # ends, which is the thing that actually needs collapsing.
+        seen: set[frozenset[tuple[int, int]]] = set()
         traced_any = False
-        for node_index in touched:
-            for contact in _contact_points(component, attachment, node_index):
-                if free_ys.size == 0:
-                    continue
-                # Step just outside the attachment band and head away from the node.
-                distances = (free_xs - contact[0]) ** 2 + (free_ys - contact[1]) ** 2
-                nearest = int(distances.argmin())
-                start = (float(free_xs[nearest]), float(free_ys[nearest]))
-                heading = np.array([start[0] - contact[0], start[1] - contact[1]])
-                norm = float(np.linalg.norm(heading))
-                if norm < 1e-6:
-                    continue
-                result = _trace_curve(bridged, attachment, start, heading / norm, node_index)
-                if result is None:
-                    continue
-                reached, arrival = result
-                key = (min(node_index, reached), max(node_index, reached))
-                if key in seen:
-                    continue
-                seen.add(key)
-                traced_any = True
-                other = _contact_points(component, attachment, reached)
-                far = min(other, key=lambda p: (p[0] - arrival[0]) ** 2 + (p[1] - arrival[1]) ** 2) if other else None
-                add(node_index, reached, component, contact, far, "trace")
+        for node_index, contact in ports:
+            if free_ys.size == 0:
+                continue
+            # Step just outside the attachment band and head away from the node.
+            distances = (free_xs - contact[0]) ** 2 + (free_ys - contact[1]) ** 2
+            nearest = int(distances.argmin())
+            start = (float(free_xs[nearest]), float(free_ys[nearest]))
+            heading = np.array([start[0] - contact[0], start[1] - contact[1]])
+            norm = float(np.linalg.norm(heading))
+            if norm < 1e-6:
+                continue
+            result = _trace_curve(bridged, attachment, start, heading / norm, node_index)
+            if result is None:
+                continue
+            reached, arrival = result
+            other = _contact_points(component, attachment, reached)
+            far = min(other, key=lambda p: (p[0] - arrival[0]) ** 2 + (p[1] - arrival[1]) ** 2) if other else None
+            if far is None:
+                continue
+            key = frozenset({(round(contact[0]), round(contact[1])), (round(far[0]), round(far[1]))})
+            if key in seen:
+                continue
+            seen.add(key)
+            traced_any = True
+            add(node_index, reached, component, contact, far, "trace")
         if not traced_any:
             names = ", ".join(nodes[i].node_id for i in touched)
-            points = _contact_points(component, attachment, touched[0])
             add(
                 touched[0],
                 None,
                 component,
-                points[0] if points else None,
+                ports[0][1] if ports else None,
                 None,
                 "trace",
                 f"curves touching {names} cross here and none could be followed through",
             )
 
-    return edges
+    return edges, port_counts
 
 
 # --------------------------------------------------------------------------- #
@@ -1027,7 +1102,7 @@ def parse_diagram(image_path: Path, *, read_text: bool = True) -> DiagramParse:
     nodes, threshold, opened = detect_nodes(image, background)
     attachment = attachment_map(nodes, image.shape[:2])
     strokes, bridged, stroke_threshold = stroke_layer(image, background, nodes, attachment)
-    edges = extract_edges(strokes, bridged, nodes, attachment)
+    edges, port_counts = extract_edges(strokes, bridged, nodes, attachment)
 
     parse = DiagramParse(
         image_path=str(image_path),
@@ -1038,6 +1113,7 @@ def parse_diagram(image_path: Path, *, read_text: bool = True) -> DiagramParse:
         stroke_threshold=stroke_threshold,
         nodes=nodes,
         edges=edges,
+        port_counts=port_counts,
         masks={"nodes": opened, "strokes": strokes, "bridged": bridged},
     )
 

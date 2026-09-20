@@ -219,7 +219,10 @@ def command_eval(args: argparse.Namespace) -> int:
     print(f"corpus   : {CORPUS_ID}  (licence {CORPUS_LICENCE}, non-commercial evaluation)")
     print(f"split    : {args.split}, {len(chosen)} flowcharts")
     print(f"sampling : {'stratified over node count' if args.stratified else 'split order'}")
-    print(f"model    : {args.model}  (num_ctx {args.num_ctx}, temperature 0, think off)")
+    if args.extractor == "geometry":
+        print("extractor: geometry  (OpenCV + tesseract; no model reads the structure)")
+    else:
+        print(f"model    : {args.model}  (num_ctx {args.num_ctx}, temperature 0, think off)")
     print(f"seeds    : sample {SAMPLE_SEED}, split {split.seed}")
     if args.split == HELD_OUT:
         print("NOTE     : held-out. Nothing here may be used to tune anything.")
@@ -227,7 +230,12 @@ def command_eval(args: argparse.Namespace) -> int:
     print(f"resources: {before.get('vram_used_mib')} MiB VRAM used, {before.get('ram_used_gb')} GB RAM")
     print()
 
-    extractor = WorkflowExtractor(model=args.model, num_ctx=args.num_ctx)
+    if args.extractor == "geometry":
+        from agentpath_ingestion.corpora.diagram_graph import GeometricWorkflowExtractor
+
+        extractor: object = GeometricWorkflowExtractor()
+    else:
+        extractor = WorkflowExtractor(model=args.model, num_ctx=args.num_ctx)
 
     def progress(index: int, total: int, outcome) -> None:
         if index % 10 == 0 or index == total:
@@ -270,7 +278,14 @@ def command_eval(args: argparse.Namespace) -> int:
     for group, values in metrics.items():
         print(f"\n{labels.get(group, group)}")
         for name, value in values.items():
-            shown = f"{value:.1%}" if isinstance(value, float) and value <= 1.0 else str(value)
+            # Not every small float is a rate. A median of 0.77 seconds per chart was being
+            # printed as "77.0%", which reads as a score rather than a duration.
+            if isinstance(value, float) and name.endswith("seconds"):
+                shown = f"{value:.2f}s"
+            elif isinstance(value, float) and value <= 1.0:
+                shown = f"{value:.1%}"
+            else:
+                shown = str(value)
             print(f"  {name:<50} {shown:>10}")
 
     reasons = report.review_reason_counts()
@@ -297,7 +312,8 @@ def command_eval(args: argparse.Namespace) -> int:
     out.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     tag = f"-s{len(chosen)}" if args.stratified else ""
-    path = out / f"flowlearn-{args.split}-{args.model.replace(':', '_')}{tag}-{stamp}.json"
+    named = "geometry" if args.extractor == "geometry" else args.model.replace(":", "_")
+    path = out / f"flowlearn-{args.split}-{named}{tag}-{stamp}.json"
     path.write_text(
         json.dumps(
             {
@@ -314,8 +330,9 @@ def command_eval(args: argparse.Namespace) -> int:
                     "split_seed": split.seed,
                     "split": args.split,
                     "fingerprint": corpus_fingerprint(records),
-                    "model": args.model,
-                    "num_ctx": args.num_ctx,
+                    "extractor": args.extractor,
+                    "model": None if args.extractor == "geometry" else args.model,
+                    "num_ctx": None if args.extractor == "geometry" else args.num_ctx,
                     "temperature": 0.0,
                     "think": False,
                     "sampling": "stratified" if args.stratified else "split_order",
@@ -341,6 +358,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sample", type=int, default=SAMPLE_SIZE, help="how many flowcharts to use")
     parser.add_argument("--split", default=DEV, choices=(DEV, HELD_OUT))
     parser.add_argument("--model", default="qwen3.5:4b", help="the vision model to test")
+    parser.add_argument(
+        "--extractor",
+        default="vlm",
+        choices=("vlm", "geometry"),
+        help=(
+            "vlm asks a vision model for the whole graph; geometry measures the graph from the "
+            "pixels. Both are scored by the same code, which is what makes them comparable."
+        ),
+    )
     parser.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX, help="context window")
     parser.add_argument("--limit", type=int, default=0, help="score only the first N of the split")
     parser.add_argument(
