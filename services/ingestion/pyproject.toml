@@ -9,6 +9,22 @@ dependencies = [
     "pydantic>=2.9",
     "pyyaml>=6.0",
     "structlog>=24.4",
+    # --- geometric workflow parsing (Stage 2B2) -----------------------------
+    # The topology of a flowchart is recovered from pixels, not from a language
+    # model, so these are the tools that do it. All three are permissively
+    # licensed and none needs a GPU or root.
+    #
+    #   opencv-python-headless  Apache-2.0, 48 MB. "headless" because nothing here
+    #                           opens a window; the GUI build drags in X11.
+    #   numpy                   BSD-3-Clause, 17 MB. OpenCV's array type.
+    #
+    # OCR is the system `tesseract` 5.5.3 (Apache-2.0), called as a subprocess.
+    # `pytesseract` was tried and dropped: it needs Pillow to pass a numpy array to
+    # the binary, and without Pillow it hangs rather than failing. Calling tesseract
+    # directly also lets OMP_THREAD_LIMIT be set per call, which matters when
+    # recognising a hundred small crops in a loop.
+    "opencv-python-headless>=4.10",
+    "numpy>=2.0",
 ]
 
 [project.scripts]
