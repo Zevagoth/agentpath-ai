@@ -144,6 +144,26 @@ corpus-eval: ## Retrieval evaluation: three methods, dev and held-out separately
 gallery-eval: ## Evaluation A: are the right figures available, in order, with working sources
 	@uv run python scripts/gallery_eval.py --corpus $(CORPUS)
 
+# --- FlowLearn: can the model read a flowchart? ------------------------------
+# CC BY-NC-SA 4.0. Non-commercial evaluation only; nothing committed, no training.
+# See services/ingestion/agentpath_ingestion/corpora/flowlearn.py for the licence note.
+
+.PHONY: flowlearn-fetch
+flowlearn-fetch: ## Download the FlowLearn sample (~16 MB, 600 flowcharts). Idempotent.
+	@uv run python scripts/flowlearn.py fetch
+
+.PHONY: flowlearn-split
+flowlearn-split: ## Write the committed dev / held-out split. Refuses to change an existing one.
+	@uv run python scripts/flowlearn.py split
+
+.PHONY: flowlearn-eval-dev
+flowlearn-eval-dev: ## Six workflow-reading metrics on the dev split
+	@uv run python scripts/flowlearn.py eval --split dev
+
+.PHONY: flowlearn-eval
+flowlearn-eval: ## Six workflow-reading metrics on held-out. Run once; tune nothing on it.
+	@uv run python scripts/flowlearn.py eval --split held_out
+
 .PHONY: corpus-eval-dev
 corpus-eval-dev: ## Retrieval evaluation on the dev split only
 	@uv run python scripts/corpus_eval.py --corpus $(CORPUS) --splits dev
