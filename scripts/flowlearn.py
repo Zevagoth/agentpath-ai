@@ -18,6 +18,7 @@ import argparse
 import json
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 from agentpath.paths import repo_root, reports_dir
 from agentpath_eval.corpus_split import DEV, HELD_OUT, load_split, make_split, split_path, write_split
@@ -36,7 +37,7 @@ from agentpath_ingestion.corpora.flowlearn import (
     fetch,
     load_corpus,
 )
-from agentpath_ingestion.corpora.workflow import WorkflowExtractor
+from agentpath_ingestion.corpora.workflow import DEFAULT_NUM_CTX, WorkflowExtractor
 
 
 class _SplitShim:
@@ -107,6 +108,93 @@ def command_split(args: argparse.Namespace) -> int:
     return 0
 
 
+def stratified_sample(records: list[FlowchartRecord], size: int) -> list[FlowchartRecord]:
+    """A fixed sample spread evenly over node counts, for comparing two models fairly.
+
+    Deterministic and derived only from the split's own order, so two models get **the same
+    flowcharts** - which is the whole point of a comparison. Spread over complexity because a
+    sample drawn from the head of the split would be whatever complexity happened to sort
+    first, and a model that is good at small charts and bad at large ones would look uniformly
+    good or uniformly bad depending on the draw.
+    """
+    buckets: dict[int, list[FlowchartRecord]] = {}
+    for record in records:
+        buckets.setdefault(record.expected_nodes, []).append(record)
+
+    chosen: list[FlowchartRecord] = []
+    order = sorted(buckets)
+    index = 0
+    # Round-robin across strata, so a shortfall in one is made up by the others rather than
+    # silently skewing the sample.
+    while len(chosen) < size and any(index < len(buckets[key]) for key in order):
+        for key in order:
+            if len(chosen) >= size:
+                break
+            if index < len(buckets[key]):
+                chosen.append(buckets[key][index])
+        index += 1
+    return chosen
+
+
+def resource_snapshot() -> dict[str, object]:
+    """VRAM, RAM and whether the model is running on the GPU or spilling to the CPU.
+
+    ``size`` against ``size_vram`` from Ollama is the only reliable CPU-offload signal: when
+    they are equal the whole model is resident on the GPU, and any shortfall is running on the
+    CPU at a fraction of the speed.
+    """
+    import subprocess
+
+    snapshot: dict[str, object] = {}
+    try:
+        output = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        ).stdout.strip()
+        used, total, util = (part.strip() for part in output.split(","))
+        snapshot["vram_used_mib"] = int(used)
+        snapshot["vram_total_mib"] = int(total)
+        snapshot["gpu_utilisation_percent"] = int(util)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        snapshot["vram"] = "unavailable"
+
+    try:
+        import httpx
+
+        loaded = httpx.get("http://127.0.0.1:11434/api/ps", timeout=10.0).json().get("models") or []
+        models = []
+        for entry in loaded:
+            size = int(entry.get("size") or 0)
+            in_vram = int(entry.get("size_vram") or 0)
+            models.append(
+                {
+                    "name": entry.get("name"),
+                    "size_gb": round(size / 1e9, 2),
+                    "size_vram_gb": round(in_vram / 1e9, 2),
+                    "fully_on_gpu": size > 0 and size == in_vram,
+                    "cpu_offload_percent": round(100 * (size - in_vram) / size, 1) if size else 0.0,
+                }
+            )
+        snapshot["loaded_models"] = models
+    except Exception:
+        snapshot["loaded_models"] = "unavailable"
+
+    try:
+        meminfo = Path("/proc/meminfo").read_text(encoding="utf-8")
+        values = {}
+        for line in meminfo.splitlines():
+            key, _, rest = line.partition(":")
+            values[key] = int(rest.strip().split()[0])
+        snapshot["ram_used_gb"] = round((values["MemTotal"] - values["MemAvailable"]) / 1e6, 1)
+        snapshot["ram_total_gb"] = round(values["MemTotal"] / 1e6, 1)
+    except (OSError, KeyError, ValueError, IndexError):
+        snapshot["ram"] = "unavailable"
+    return snapshot
+
+
 def command_eval(args: argparse.Namespace) -> int:
     root = default_root(repo_root())
     records = load_corpus(root, sample=args.sample)
@@ -123,18 +211,23 @@ def command_eval(args: argparse.Namespace) -> int:
     by_id = {record.flowchart_id: record for record in records}
     wanted = split.dev if args.split == DEV else split.held_out
     chosen = [by_id[flowchart_id] for flowchart_id in wanted if flowchart_id in by_id]
-    if args.limit:
+    if args.stratified:
+        chosen = stratified_sample(chosen, args.stratified)
+    elif args.limit:
         chosen = chosen[: args.limit]
 
     print(f"corpus   : {CORPUS_ID}  (licence {CORPUS_LICENCE}, non-commercial evaluation)")
     print(f"split    : {args.split}, {len(chosen)} flowcharts")
-    print(f"model    : {args.model}")
+    print(f"sampling : {'stratified over node count' if args.stratified else 'split order'}")
+    print(f"model    : {args.model}  (num_ctx {args.num_ctx}, temperature 0, think off)")
     print(f"seeds    : sample {SAMPLE_SEED}, split {split.seed}")
     if args.split == HELD_OUT:
         print("NOTE     : held-out. Nothing here may be used to tune anything.")
+    before = resource_snapshot()
+    print(f"resources: {before.get('vram_used_mib')} MiB VRAM used, {before.get('ram_used_gb')} GB RAM")
     print()
 
-    extractor = WorkflowExtractor(model=args.model)
+    extractor = WorkflowExtractor(model=args.model, num_ctx=args.num_ctx)
 
     def progress(index: int, total: int, outcome) -> None:
         if index % 10 == 0 or index == total:
@@ -145,7 +238,19 @@ def command_eval(args: argparse.Namespace) -> int:
                 flush=True,
             )
 
-    report = evaluate(chosen, extractor, corpus_id=CORPUS_ID, split=args.split, on_progress=progress)
+    peak: dict[str, object] = {}
+
+    def progress_and_sample(index: int, total: int, outcome) -> None:
+        progress(index, total, outcome)
+        # Sampled mid-run rather than only at the end: the model is resident then, so this is
+        # what actually measures VRAM and CPU offload.
+        if index == min(3, total) or index == total // 2:
+            snapshot = resource_snapshot()
+            if not peak or int(snapshot.get("vram_used_mib") or 0) > int(peak.get("vram_used_mib") or 0):
+                peak.clear()
+                peak.update(snapshot)
+
+    report = evaluate(chosen, extractor, corpus_id=CORPUS_ID, split=args.split, on_progress=progress_and_sample)
     metrics = report.metrics
 
     print()
@@ -159,6 +264,7 @@ def command_eval(args: argparse.Namespace) -> int:
         "4_arrow_direction": "4. Arrow direction",
         "5_branches": "5. Branch / decision detection",
         "6_path_reachability": "6. Path reachability",
+        "7_acceptance_gate": "7. Acceptance gate - does it separate right from wrong?",
         "operational": "Operational",
     }
     for group, values in metrics.items():
@@ -173,10 +279,25 @@ def command_eval(args: argparse.Namespace) -> int:
         for reason, count in list(reasons.items())[:6]:
             print(f"  {count:>4}  {reason}")
 
+    after = resource_snapshot()
+    print("\nresources")
+    for name, snapshot in (("before", before), ("during", peak or after), ("after", after)):
+        vram = snapshot.get("vram_used_mib")
+        models = snapshot.get("loaded_models")
+        detail = ""
+        if isinstance(models, list) and models:
+            entry = models[0]
+            detail = (
+                f"  {entry['name']} {entry['size_gb']} GB, {entry['size_vram_gb']} GB in VRAM, "
+                f"cpu offload {entry['cpu_offload_percent']}%"
+            )
+        print(f"  {name:<7} VRAM {vram} MiB   RAM {snapshot.get('ram_used_gb')} GB{detail}")
+
     out = reports_dir()
     out.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    path = out / f"flowlearn-{args.split}-{stamp}.json"
+    tag = f"-s{len(chosen)}" if args.stratified else ""
+    path = out / f"flowlearn-{args.split}-{args.model.replace(':', '_')}{tag}-{stamp}.json"
     path.write_text(
         json.dumps(
             {
@@ -194,6 +315,13 @@ def command_eval(args: argparse.Namespace) -> int:
                     "split": args.split,
                     "fingerprint": corpus_fingerprint(records),
                     "model": args.model,
+                    "num_ctx": args.num_ctx,
+                    "temperature": 0.0,
+                    "think": False,
+                    "sampling": "stratified" if args.stratified else "split_order",
+                    "flowcharts_scored": len(chosen),
+                    "flowchart_ids": [record.flowchart_id for record in chosen],
+                    "resources": {"before": before, "during": peak or after, "after": after},
                     "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
                 },
                 **report.to_dict(),
@@ -213,7 +341,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sample", type=int, default=SAMPLE_SIZE, help="how many flowcharts to use")
     parser.add_argument("--split", default=DEV, choices=(DEV, HELD_OUT))
     parser.add_argument("--model", default="qwen3.5:4b", help="the vision model to test")
+    parser.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX, help="context window")
     parser.add_argument("--limit", type=int, default=0, help="score only the first N of the split")
+    parser.add_argument(
+        "--stratified",
+        type=int,
+        default=0,
+        help="score a fixed N spread evenly over node counts. Use this to compare two models.",
+    )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
 

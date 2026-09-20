@@ -61,6 +61,12 @@ MIN_TRUSTED_CONFIDENCE = 0.6
 MIN_NODES = 2
 MIN_EDGES = 1
 
+#: Context window for extraction. 8,192 is enough for the prompt, one image and a graph of a
+#: dozen nodes, and small enough that a 9B model still fits in 8 GB of VRAM beside its vision
+#: tower. Kept modest deliberately: a larger window costs KV cache, and the measured answers
+#: are a few hundred tokens.
+DEFAULT_NUM_CTX = 8192
+
 
 class NodeKind(StrEnum):
     """What a box in the diagram does."""
@@ -267,14 +273,20 @@ class WorkflowExtractor:
         base_url: str = "http://127.0.0.1:11434",
         model: str = "qwen3.5:4b",
         timeout: float = 600.0,
+        num_ctx: int = DEFAULT_NUM_CTX,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._timeout = timeout
+        self._num_ctx = num_ctx
 
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def num_ctx(self) -> int:
+        return self._num_ctx
 
     def extract(self, path: Path, *, image_id: str, document_id: str, corpus_id: str) -> WorkflowGraph:
         """Read the diagram at *path*. Never raises; a failure is a status."""
@@ -288,8 +300,14 @@ class WorkflowExtractor:
                         "prompt": EXTRACT_PROMPT,
                         "images": [base64.b64encode(path.read_bytes()).decode("ascii")],
                         "stream": False,
+                        # No chain-of-thought and no sampling: this is a reading task, and a
+                        # re-run should agree with itself so the numbers are reproducible.
                         "think": False,
-                        "options": {"temperature": 0.0, "num_ctx": 16384, "num_predict": 2000},
+                        "options": {
+                            "temperature": 0.0,
+                            "num_ctx": self._num_ctx,
+                            "num_predict": 2000,
+                        },
                     },
                 )
                 response.raise_for_status()
@@ -597,6 +615,7 @@ def write_workflows(graphs: list[WorkflowGraph], target: Path) -> Path:
 
 
 __all__ = [
+    "DEFAULT_NUM_CTX",
     "EXTRACT_PROMPT",
     "MAX_PATHS",
     "MAX_PATH_LENGTH",

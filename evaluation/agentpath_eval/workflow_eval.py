@@ -396,6 +396,7 @@ class WorkflowReport:
             "6_path_reachability": {
                 "accuracy": round(self._mean(lambda o: 1.0 if o.reachability_correct else 0.0), 4),
             },
+            "7_acceptance_gate": self.acceptance_gate(),
             "operational": {
                 "flowcharts": len(self.outcomes),
                 "scored": len(scored),
@@ -407,6 +408,43 @@ class WorkflowReport:
                 "median_seconds": round(statistics.median([o.seconds for o in scored]), 2) if scored else 0.0,
                 "total_seconds": round(self.seconds, 1),
             },
+        }
+
+    def acceptance_gate(self) -> dict[str, Any]:
+        """Does the validator actually separate correct extractions from wrong ones?
+
+        The question a ``needs_review`` rate cannot answer. A gate that refuses 93% is safe but
+        says nothing unless the ones it *accepts* are better than the ones it rejects.
+
+        ``false_accepted`` is the number that decides whether extraction can ship: an
+        extraction the validator passed whose graph still answers the corpus's directed-pair
+        question wrongly. Each one is a wrong path this system would have shown to an agent as
+        trustworthy.
+        """
+        scored = self.scored
+        accepted = [outcome for outcome in scored if not outcome.needs_review]
+        refused = [outcome for outcome in scored if outcome.needs_review]
+        false_accepted = [outcome for outcome in accepted if outcome.reachability_correct is False]
+
+        def mean_reach(group: list[FlowchartOutcome]) -> float:
+            values = [1.0 if o.reachability_correct else 0.0 for o in group if o.reachability_correct is not None]
+            return round(statistics.fmean(values), 4) if values else 0.0
+
+        def mean_directed(group: list[FlowchartOutcome]) -> float:
+            return round(statistics.fmean([o.directed_edges.f1 for o in group]), 4) if group else 0.0
+
+        return {
+            "accepted": len(accepted),
+            "refused": len(refused),
+            "false_accepted_wrong_path_shown_as_usable": len(false_accepted),
+            "false_accept_rate_of_accepted": round(len(false_accepted) / len(accepted), 4) if accepted else 0.0,
+            "reachability_when_accepted": mean_reach(accepted),
+            "reachability_when_refused": mean_reach(refused),
+            "directed_edge_f1_when_accepted": mean_directed(accepted),
+            "directed_edge_f1_when_refused": mean_directed(refused),
+            # The gate earns its place only if accepted beats refused. False here means it is a
+            # blunt filter rather than a signal, however high the refusal rate.
+            "gate_separates_correct_from_wrong": mean_reach(accepted) > mean_reach(refused),
         }
 
     def review_reason_counts(self) -> dict[str, int]:

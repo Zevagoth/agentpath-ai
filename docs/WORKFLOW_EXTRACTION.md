@@ -161,3 +161,113 @@ not a working feature.
 
 *Content from the linked paper and dataset card was summarised for this document; see the
 sources for the originals.*
+
+---
+
+# Comparison: `qwen3.5:4b` against `qwen3.5:9b`
+
+A limited comparison, run on dev only, on the **same 40 flowcharts** with the same prompt, the
+same schema, the same metrics and the same settings (`temperature=0`, `think=false`,
+`num_ctx=8192`). The 40 are a fixed sample spread evenly over node count, so neither model
+gets an easier draw. 4B was unloaded from VRAM before 9B ran; the two were never resident
+together.
+
+## Result: 9B is better at structure and still fails the bar
+
+| # | Metric | `qwen3.5:4b` | `qwen3.5:9b` | Δ |
+| --- | --- | --- | --- | --- |
+| 1 | Text (OCR) label recall | 89.2% | **93.8%** | +4.6 |
+| 2 | Node F1 | 89.2% | **93.8%** | +4.6 |
+| | whole node set exactly right | 45.0% | **72.5%** | +27.5 |
+| | node count exactly right | 100% | 100% | — |
+| 3 | Edge F1 (undirected) | 68.9% | **79.7%** | +10.8 |
+| 4 | Directed edge F1 | 63.5% | **77.1%** | +13.6 |
+| | direction right among edges found | 92.9% | **96.4%** | +3.5 |
+| | corpus ordered-pair probe | 60.0% | 62.5% | +2.5 |
+| 5 | **Branch / decision F1** | 58.4% | **69.6%** | **+11.2** |
+| 6 | **Path reachability** | 52.5% | **55.0%** | **+2.5** |
+
+### Against the promotion criteria
+
+| Criterion | Required | Measured | |
+| --- | --- | --- | --- |
+| Branch F1 gain | ≥ +15 points | **+11.2** | **fails** |
+| Path reachability gain | ≥ +15 points | **+2.5** | **fails** |
+| No material OCR / Node F1 regression | no regression | +4.6 / +4.6 | passes |
+| No wrong path accepted as usable | zero | **0** | passes |
+
+**Two of four fail, including the one that decides the feature.** Path reachability moved 2.5
+points and sits at 55.0% — still a coin flip. So 9B is **not promising** by the stated bar, and
+per the instruction no quantizations or further models were tried and 9B was **not run on
+held-out**.
+
+### The interesting part: why structure improved and paths did not
+
+9B is clearly the better reader. It gets the whole node set exactly right on 72.5% of
+flowcharts against 45.0%, and its per-edge direction accuracy is 96.4%.
+
+And yet path reachability barely moves. The reason is compounding: reachability needs *every*
+edge along the relevant path to be right, so a per-edge accuracy of 96.4% over a 7-edge median
+graph still leaves a large chance of at least one break, and one break changes the answer.
+Per-edge gains do not multiply into whole-graph correctness — which is why per-edge numbers are
+the wrong thing to promote a feature on, and why metric 6 exists.
+
+This is also evidence about *what kind* of improvement would help. Scaling the general model
+2.4× bought +13.6 on directed edges and +2.5 on paths. Reaching a usable path accuracy this way
+would need a model far larger than this hardware can hold, which points at a different approach
+- a diagram-specific model, or an intermediate structured text representation - rather than at
+more parameters.
+
+### The acceptance gate under 9B
+
+| | `qwen3.5:4b` | `qwen3.5:9b` |
+| --- | --- | --- |
+| Accepted as usable | 5 | 1 |
+| **Falsely accepted (wrong path shown as usable)** | **4** | **0** |
+| False-accept rate of accepted | **80.0%** | 0.0% |
+| Reachability when accepted | 20.0% | 100% |
+| Reachability when refused | 57.1% | 53.8% |
+| Gate separates right from wrong | **No** | Yes |
+
+The 4B row is the worst number in this whole report: of five extractions the validator passed
+as usable, **four had the wrong path**, and accepted extractions were *less* accurate than
+refused ones. The gate was actively anti-correlated with correctness.
+
+9B's row looks clean but rests on **a single accepted extraction out of 40**, which is not
+evidence of a calibrated gate — it is a gate that refused 97.5% and happened to be right about
+the one it let through. Neither model justifies trusting the acceptance decision.
+
+### Cost
+
+| | `qwen3.5:4b` | `qwen3.5:9b` |
+| --- | --- | --- |
+| Median seconds per flowchart | 13.0 | **40.5** (3.1×) |
+| Peak VRAM during run | 6,615 MiB | 7,208 MiB |
+| Model resident in VRAM | 3.27 of 3.27 GB | **3.6 of 6.28 GB** |
+| **CPU offload** | **0%** | **42.7%** |
+| Peak RAM | 19.8 GB | 20.6 GB |
+
+9B does not fit in 8 GB of VRAM beside the embedder: 42.7% of it runs on the CPU, which is
+where the 3.1× latency comes from. A 40-second extraction is acceptable at ingestion time and
+would not be at request time.
+
+## Decision
+
+**`qwen3.5:4b` stays as the product model.** 9B was a comparison, not a candidate, and it was
+not promoted. Workflow extraction is **not enabled automatically** anywhere in the product.
+
+The shipped behaviour for a workflow diagram is therefore:
+
+1. **Always show the original image.** It is the source of truth.
+2. **`Needs manual review`**, with the validator's reasons, whenever the extraction did not
+   pass — which on this evidence is 87.5% to 97.5% of the time.
+3. **Never show an inferred path** that the validator did not accept.
+
+A path summary above the image remains implemented and remains gated on acceptance. Given that
+the gate does not demonstrably separate correct from wrong, it stays off by default and no
+automatic routing is claimed.
+
+### What would change this
+
+Path reachability well above 90%, *and* an acceptance gate whose accepted set measurably beats
+its refused set on a sample large enough to mean something. Neither model reaches either.
