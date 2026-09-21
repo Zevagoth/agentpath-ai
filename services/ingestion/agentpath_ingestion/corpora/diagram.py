@@ -157,6 +157,11 @@ TRACE_HEADING_INERTIA = 0.6
 #: middle of a short connector.
 DIRECTION_RADIUS_RATIO = 0.45
 
+#: Taken off a skeleton route's cost when the ink at its two ends says one of them is an arrowhead.
+#: A connector has one head and one tail, so a pairing that produces that is more likely to be real
+#: than one joining two heads or two tails - and it is evidence the medial axis cannot see.
+SKELETON_HEAD_BONUS = 0.75
+
 #: Ink ratio between the two ends below which direction is not considered established. 1.0 means
 #: "any difference at all decides"; measured on dev, the ratio was 1.89 at the median when the
 #: decision was right and 1.06 when it was wrong, so a margin above 1.0 trades recall for
@@ -994,6 +999,121 @@ def _trace_curve(
     return None
 
 
+def _skeleton_pairs(
+    component: np.ndarray,
+    strokes: np.ndarray,
+    attachment: np.ndarray,
+    ports: list[tuple[int, tuple[float, float]]],
+    radius: int,
+) -> list[tuple[int, int, bool]] | None:
+    """Pair up a bundle's attachments by reading its medial axis.
+
+    Returns ``[(port, port, confirmed from both ends)]``, or ``None`` when the skeleton produced
+    nothing usable and the caller should fall back to stepping along the mask.
+
+    Three things this does that stepping along the mask cannot. The tangle becomes a graph, so a
+    crossing is a junction whose arcs pair off by tangent and curvature rather than a place a walker
+    might wander. A branch - several connectors sharing a stem, which is what a fan-out looks like a
+    few pixels off the border - is kept as a branch instead of being rewritten as two curves that
+    happen to cross. And the attachments are paired by an exact minimum-cost matching over all of
+    them, so three attachments can no longer all claim the same fourth one, which is what held the
+    previous two attempts to 81% precision.
+    """
+    from agentpath_ingestion.corpora.diagram_skeleton import (
+        build_graph,
+        match_pairs,
+        prune_spurs,
+        read_junctions,
+        routes_between_ends,
+        thin,
+    )
+
+    ys, xs = np.nonzero(component)
+    if ys.size == 0:
+        return None
+    # Work in the component's own bounding box: thinning is iterative, and on a wide chart most of
+    # the image is empty.
+    top, bottom = int(ys.min()), int(ys.max()) + 1
+    left, right = int(xs.min()), int(xs.max()) + 1
+    # Thinned from the *raw* strokes inside this component, not from the bridged mask. Bridging is a
+    # union of closings at twelve orientations, which leaves a small lump at every kink; thinning
+    # those lumps invents junctions and tips, and on dev it read 159 junctions as branches against
+    # only 62 as crossings, with more tips than attachments on 39 of 108 bundles.
+    window = ((strokes > 0) & component)[top:bottom, left:right].astype(np.uint8) * 255
+    local_attachment = attachment[top:bottom, left:right]
+
+    skeleton = prune_spurs(thin(window), keep=local_attachment >= 0)
+    graph = build_graph(skeleton)
+    if not graph.arcs:
+        return None
+    junctions = read_junctions(graph)
+
+    tips = graph.free_ends
+    if len(tips) < 2:
+        return None
+    tip_points = {end: graph.arcs[end[0]].end_point(end[1]) for end in tips}
+
+    # Which skeleton tip is each attachment? The nearest one - and a tip may serve more than one.
+    #
+    # Insisting on one attachment per tip was measured and was the single largest reason this path
+    # declined: 40 of 108 dev bundles. It is also wrong in principle. Two connectors leaving a node
+    # side by side share one tip because that is how they are drawn, and the right reading is that
+    # both of them start there, not that the tangle is unreadable.
+    ports_of_tip: dict[tuple[int, bool], list[int]] = {}
+    tip_of_port: dict[int, tuple[int, bool]] = {}
+    for index, (_node_index, point) in enumerate(ports):
+        local = (point[1] - top, point[0] - left)
+        best = min(tips, key=lambda end: (tip_points[end][0] - local[0]) ** 2 + (tip_points[end][1] - local[1]) ** 2)
+        ports_of_tip.setdefault(best, []).append(index)
+        tip_of_port[index] = best
+
+    costs: dict[tuple[int, int], float] = {}
+    confirmed: set[tuple[int, int]] = set()
+    for index, tip in tip_of_port.items():
+        for reached, cost, travelled in routes_between_ends(graph, junctions, tip):
+            # Kinks and length both count against a route; the scale is set so that one sharp kink
+            # costs about as much as a few hundred pixels of extra travel.
+            score = cost + travelled / 300.0
+            for other in ports_of_tip.get(reached, ()):
+                if other == index:
+                    continue
+                key = (min(index, other), max(index, other))
+                if key in costs:
+                    # Found from both ends, which is stronger evidence. Keep the cheaper reading.
+                    confirmed.add(key)
+                    costs[key] = min(costs[key], score)
+                else:
+                    costs[key] = score
+
+    if not costs:
+        return None
+
+    # An arrowhead at exactly one end is what a connector looks like, and the skeleton cannot see
+    # ink. Where the ink says so, the pairing is made cheaper.
+    ink = {index: _ink_near(point, radius, component, strokes) for index, (_node, point) in enumerate(ports)}
+    for (first, second), score in list(costs.items()):
+        heavier, lighter = max(ink[first], ink[second]), min(ink[first], ink[second])
+        if lighter and heavier / lighter >= MIN_DIRECTION_RATIO:
+            costs[(first, second)] = max(score - SKELETON_HEAD_BONUS, 0.0)
+
+    pairs = match_pairs(len(ports), costs)
+    if not pairs:
+        return None
+    # Only accepted when it accounts for every attachment. A partial reading is weaker evidence than
+    # the fallback, not stronger: on a chart whose skeleton came back with one limb detached, the
+    # matching paired two attachments and abandoned the other two, which lost an edge that stepping
+    # along the mask finds. An explanation that leaves half the tangle unexplained is not preferred
+    # to one that does not.
+    if len({index for pair in pairs for index in pair}) != len(ports):
+        return None
+    # Every pair must have been found by routing from *both* of its ends. A route found from one end
+    # only means the return journey took a different turn somewhere, which is the signature of a
+    # junction that was read wrongly, and those are the readings this path gets wrong.
+    if any((first, second) not in confirmed for first, second in pairs):
+        return None
+    return [(first, second, True) for first, second in pairs]
+
+
 def _direction_of(
     component: np.ndarray,
     strokes: np.ndarray,
@@ -1147,7 +1267,27 @@ def extract_edges(
             continue
 
         # More attachments than one connector can account for: curves that cross, fan out from one
-        # node, or run alongside each other. Follow each one.
+        # node, or run alongside each other.
+        #
+        # First try the medial axis, which turns the tangle into a graph of arcs and decides the
+        # whole thing at once. It is the extra path for this case only; a component carrying a single
+        # connector is left to the branch above, which is right 96.4% of the time and could only be
+        # made worse by routing it.
+        skeleton_pairs = _skeleton_pairs(component, strokes, attachment, ports, radius)
+        if skeleton_pairs is not None:
+            for first, second, confirmed in skeleton_pairs:
+                add(
+                    ports[first][0],
+                    ports[second][0],
+                    component,
+                    ports[first][1],
+                    ports[second][1],
+                    "skeleton" if confirmed else "skeleton-one-way",
+                )
+            continue
+
+        # The skeleton had nothing to say - too few tips, or two attachments landing on one tip.
+        # Fall back to stepping along the mask.
         #
         # Keyed by the pair of *attachment points*, not the pair of nodes. Two connectors can join
         # the same two nodes - "no? go back and retry" draws one arrow each way - and keying by node
