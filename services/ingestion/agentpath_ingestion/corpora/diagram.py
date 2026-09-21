@@ -723,10 +723,43 @@ _BRIDGE_KERNELS: tuple[np.ndarray, ...] = tuple(
 def bridge_dashes(strokes: np.ndarray) -> np.ndarray:
     """Join a dotted connector into one component without fattening it sideways.
 
-    A closing with a thin line kernel spans a gap along that line's direction and leaves
-    everything else alone, so unioning the result over 12 orientations reconnects dashes at any
-    angle while keeping two parallel curves apart. See the module docstring for the measurement
-    against square closing.
+    A dotted connector is drawn as separate dashes, and until they are joined each one is its own
+    component, so the connector reaches no node and is lost. Measured on 40 dev charts: 108
+    components reached exactly one node and 282 reached none, against 253 real edges. Closing with a
+    thin line kernel spans a gap along that line's direction and leaves everything else alone, so
+    unioning the result over 12 orientations reconnects dashes at any angle while keeping two
+    parallel curves apart. Those two counts fell to 6 and 5.
+
+    **A selective, evidence-per-join replacement was built and rejected on measurement.** The
+    objection to this function is real: a closing joins whatever lies along the kernel, so two
+    unrelated curves passing near each other are welded together, and components touching three or
+    more nodes rose from 9 to 21 - the parser's worst case, manufactured by its own bridging. The
+    replacement joined two pieces only when the gap was within four stroke widths, both ends pointed
+    along the join, the join missed every node box, the join crossed no third piece, and each
+    extremity was used at most once, with arrowheads exempt from the collinearity test.
+
+    On the full dev split it was much worse than this function, not better:
+
+                              global closing   selective
+      undirected edge F1              85.5%       75.6%
+      edge recall                     85.1%       68.9%
+      edge count accuracy             75.2%       23.5%
+      directed edge F1                83.6%       73.7%
+      branch F1                       82.8%       65.2%
+      path reachability               73.2%       64.9%
+      accepted coverage               48.3%       12.6%
+
+    Recall collapsed because it *under*-joined. The diagnosis, for whoever tries again: joins were
+    taken greedily by smallest gap, and a JPEG speckle two pixels from a dash end consumes that end
+    before the real dash three pixels further on can claim it, so the connector stays broken. A
+    second attempt should match ends globally rather than greedily, and should ignore fragments too
+    small to be a dash.
+
+    Worth knowing before trying: dashes are not where the remaining error is. Split by drawing style
+    on dev, directed edge F1 is 83.4% on the 270 charts with dotted connectors against 85.2% on the
+    32 solid ones - the same within noise. Split by crossings it is 93.8% on the 126 charts with
+    none against 76.3% on the 176 with some. This function's cost is the crossings it manufactures,
+    not the dashes it misses, so a better bridge is worth less than a better way through a crossing.
     """
     out = strokes.copy()
     for kernel in _BRIDGE_KERNELS:
@@ -777,6 +810,11 @@ def stroke_layer(
 # 5. Connectors: components, and tracing the ones that merged
 # --------------------------------------------------------------------------- #
 
+#: Radius within which a connector's own pixels are used to estimate the direction it leaves a node
+#: in. About three stroke widths at the scale these charts are drawn: long enough to average out
+#: one jagged pixel, short enough that a curve has not yet bent away.
+TRACE_SEED_RADIUS = 10
+
 #: Offsets forming a ring of radius ``TRACE_STEP``, the tracer's candidate next positions.
 _TRACE_RING: tuple[tuple[int, int], ...] = tuple(
     (dx, dy)
@@ -786,26 +824,136 @@ _TRACE_RING: tuple[tuple[int, int], ...] = tuple(
 )
 
 
-def _contact_points(component: np.ndarray, attachment: np.ndarray, index: int) -> list[tuple[float, float]]:
-    """Centroid of each separate place where this component meets node *index*."""
+def _contact_points(
+    component: np.ndarray, attachment: np.ndarray, index: int, node: DetectedNode | None = None
+) -> list[tuple[float, float]]:
+    """Each separate place where this component meets node *index*, as one point apiece.
+
+    The point is the one closest to the node's rectangle, not the centroid of the band. The
+    centroid drifts backwards along the connector as the approach flattens, because the band is a
+    fixed width and a shallow crossing of it is long: measured on a connector arriving at 14
+    degrees, the centroid sat 18 px back from the arrowhead's tip, which put the whole arrowhead
+    outside the window the direction test measures and left the direction undecided. The closest
+    point is where the arrow was drawn to meet the box, which is what both the direction test and
+    the overlay want.
+    """
     contact = (component & (attachment == index)).astype(np.uint8)
-    count, _labels, _stats, centroids = cv2.connectedComponentsWithStats(contact, connectivity=8)
-    return [(float(centroids[i][0]), float(centroids[i][1])) for i in range(1, count)]
+    count, labels, _stats, centroids = cv2.connectedComponentsWithStats(contact, connectivity=8)
+    points: list[tuple[float, float]] = []
+    for label in range(1, count):
+        if node is None:
+            points.append((float(centroids[label][0]), float(centroids[label][1])))
+            continue
+        ys, xs = np.nonzero(labels == label)
+        if ys.size == 0:
+            continue
+        # Distance to the node's centre rather than to its rectangle. Distance to the rectangle ties
+        # across a whole row of pixels, and the tie was broken by scan order, which picked the left
+        # corner of an arrowhead's base instead of its tip. Distance to the centre picks the pixel
+        # drawn deepest into the node, which is the tip.
+        centre_x, centre_y = node.centre
+        reach = (xs - centre_x) ** 2 + (ys - centre_y) ** 2
+        closest = reach.min()
+        # Averaged over the pixels effectively tied for closest, so one ragged pixel cannot set it.
+        tied = reach <= closest + 4.0
+        points.append((float(xs[tied].mean()), float(ys[tied].mean())))
+    return points
 
 
-def _ink_near(point: tuple[float, float], radius: int, component: np.ndarray, strokes: np.ndarray) -> int:
-    """Drawn pixels of this component within *radius* of *point*.
+def _leaving_heading(
+    component: np.ndarray,
+    attachment: np.ndarray,
+    contact: tuple[float, float],
+) -> tuple[tuple[float, float], np.ndarray] | None:
+    """Where a connector starts, and the direction it actually leaves the node in.
+
+    The direction comes from the connector's own pixels near the attachment, not from where the
+    node's border happens to face. Taking it from the border was a real defect with a narrow
+    symptom: it is correct for a connector leaving straight up, down or sideways, and wrong by the
+    curve's slope for anything diagonal. On a 34-degree diagonal the seed heading came out vertical,
+    which is a 56-degree error, just over the tracer's 55-degree turn limit - so the trace died on
+    its first step and every crossing of two diagonals went unresolved. Both crossing regression
+    tests failed on drawings with no noise in them at all.
+
+    Returns ``(start point, unit heading)``, or ``None`` when there is nothing to trace.
+    """
+    height, width = component.shape
+    cx, cy = round(float(contact[0])), round(float(contact[1]))
+    radius = TRACE_SEED_RADIUS
+    y0, y1 = max(cy - radius, 0), min(cy + radius + 1, height)
+    x0, x1 = max(cx - radius, 0), min(cx + radius + 1, width)
+    # Only the part of the connector that is clear of every node, so the node's own area cannot
+    # drag the estimate back towards itself.
+    window = component[y0:y1, x0:x1] & (attachment[y0:y1, x0:x1] < 0)
+    ys, xs = np.nonzero(window)
+    if ys.size == 0:
+        return None
+    xs = xs + x0
+    ys = ys + y0
+    within = (xs - cx) ** 2 + (ys - cy) ** 2 <= radius * radius
+    if not within.any():
+        within = np.ones(xs.shape, dtype=bool)
+    near_x, near_y = xs[within], ys[within]
+
+    heading = np.array([float(near_x.mean()) - contact[0], float(near_y.mean()) - contact[1]])
+    norm = float(np.linalg.norm(heading))
+    if norm < 1e-6:
+        return None
+    heading /= norm
+
+    # Start from the pixel closest to the attachment, so nothing before the start is skipped.
+    distances = (near_x - contact[0]) ** 2 + (near_y - contact[1]) ** 2
+    nearest = int(distances.argmin())
+    return (float(near_x[nearest]), float(near_y[nearest])), heading
+
+
+#: Half-width of the corridor that ink is counted in, about the connector's own axis. A little wider
+#: than an arrowhead's half-width of ~6 px, so the whole head counts.
+#:
+#: A *cone* from the attachment was tried first and was wrong in an instructive way: at the head end
+#: the direction a connector leaves the node in points back along the shaft, so the arrowhead's
+#: widest part lies perpendicular to it and a cone excludes exactly the ink the test exists to find.
+#: A corridor about the same axis contains it.
+INK_CORRIDOR_HALF_WIDTH = 9.0
+
+#: The corridor is not limited along its own axis, only across it. Limiting how far *behind* the
+#: attachment it reached was tried at 8 px and lost the arrowhead on a shallow approach: the
+#: attachment point is the centroid of the connector's pixels inside a 6 px band, so on a connector
+#: arriving at 14 degrees that centroid sits 18 px back from the tip and the head fell outside.
+#: The square window around the attachment bounds the corridor in both directions already.
+
+
+def _ink_near(
+    point: tuple[float, float],
+    radius: int,
+    component: np.ndarray,
+    strokes: np.ndarray,
+    heading: np.ndarray | None = None,
+) -> int:
+    """Drawn pixels belonging to *this* connector within *radius* of *point*.
 
     Counted on the raw stroke mask, so bridged-in pixels cannot masquerade as an arrowhead.
+
+    When *heading* is given, only pixels in a corridor about that axis count. Without it, two
+    connectors leaving a node from the same point both contribute, so the shared end carries two
+    stubs' worth of ink against the far end's single arrowhead - and the direction of both inverts.
+    A fan-out drawn as a clean Y reported both of its arrows backwards.
     """
     height, width = component.shape
     cx, cy = round(float(point[0])), round(float(point[1]))
     y0, y1 = max(cy - radius, 0), min(cy + radius + 1, height)
     x0, x1 = max(cx - radius, 0), min(cx + radius + 1, width)
-    window = component[y0:y1, x0:x1]
-    if not window.any():
+    selected = component[y0:y1, x0:x1] & (strokes[y0:y1, x0:x1] > 0)
+    if not selected.any():
         return 0
-    return int(((strokes[y0:y1, x0:x1] > 0) & window).sum())
+    if heading is None:
+        return int(selected.sum())
+
+    ys, xs = np.mgrid[y0:y1, x0:x1]
+    dx = xs - float(point[0])
+    dy = ys - float(point[1])
+    across = np.abs(dx * -float(heading[1]) + dy * float(heading[0]))
+    return int((selected & (across <= INK_CORRIDOR_HALF_WIDTH)).sum())
 
 
 def _trace_curve(
@@ -852,14 +1000,20 @@ def _direction_of(
     radius: int,
     first: tuple[float, float],
     second: tuple[float, float],
+    first_heading: np.ndarray | None = None,
+    second_heading: np.ndarray | None = None,
 ) -> tuple[bool, int, int, float]:
     """Which end carries the arrowhead, by comparing ink at the two ends of one connector.
+
+    The headings, when known, restrict each count to the connector's own ink - see
+    :func:`_ink_near`. Without them a node where two connectors meet at one point reports both
+    of its arrows backwards.
 
     Returns ``(second end is the head, ink at first, ink at second, ratio)``. The caller decides
     what to do when the ratio is too close to call.
     """
-    ink_first = _ink_near(first, radius, component, strokes)
-    ink_second = _ink_near(second, radius, component, strokes)
+    ink_first = _ink_near(first, radius, component, strokes, first_heading)
+    ink_second = _ink_near(second, radius, component, strokes, second_heading)
     larger, smaller = max(ink_first, ink_second), min(ink_first, ink_second)
     ratio = larger / smaller if smaller else float("inf") if larger else 1.0
     return ink_second > ink_first, ink_first, ink_second, ratio
@@ -895,6 +1049,13 @@ def extract_edges(
     ) -> None:
         """Record one edge, deciding its direction from ink when both ends are known."""
         index = len(edges)
+        if source is not None and target is not None and first is not None and second is not None:
+            first_seed = _leaving_heading(component, attachment, first)
+            second_seed = _leaving_heading(component, attachment, second)
+            first_heading = first_seed[1] if first_seed else None
+            second_heading = second_seed[1] if second_seed else None
+        else:
+            first_heading = second_heading = None
         if source is None or target is None or first is None or second is None:
             edges.append(
                 DetectedEdge(
@@ -910,7 +1071,9 @@ def extract_edges(
             )
             return
 
-        second_is_head, ink_first, ink_second, ratio = _direction_of(component, strokes, radius, first, second)
+        second_is_head, ink_first, ink_second, ratio = _direction_of(
+            component, strokes, radius, first, second, first_heading, second_heading
+        )
         established = ratio >= MIN_DIRECTION_RATIO
         if second_is_head:
             src, tgt, src_point, tgt_point = source, target, first, second
@@ -961,7 +1124,7 @@ def extract_edges(
         # first attachment per node reported one connector there and silently lost the other.
         ports: list[tuple[int, tuple[float, float]]] = []
         for node_index in touched:
-            for point in _contact_points(component, attachment, node_index):
+            for point in _contact_points(component, attachment, node_index, nodes[node_index]):
                 ports.append((node_index, point))
         for node_index, _point in ports:
             port_counts[nodes[node_index].node_id] = port_counts.get(nodes[node_index].node_id, 0) + 1
@@ -985,8 +1148,7 @@ def extract_edges(
 
         # More attachments than one connector can account for: curves that cross, fan out from one
         # node, or run alongside each other. Follow each one.
-        free = component & (attachment < 0)
-        free_ys, free_xs = np.nonzero(free)
+        #
         # Keyed by the pair of *attachment points*, not the pair of nodes. Two connectors can join
         # the same two nodes - "no? go back and retry" draws one arrow each way - and keying by node
         # would collapse them into one edge and lose a real branch of the workflow. Keying by point
@@ -995,21 +1157,15 @@ def extract_edges(
         seen: set[frozenset[tuple[int, int]]] = set()
         traced_any = False
         for node_index, contact in ports:
-            if free_ys.size == 0:
+            seed = _leaving_heading(component, attachment, contact)
+            if seed is None:
                 continue
-            # Step just outside the attachment band and head away from the node.
-            distances = (free_xs - contact[0]) ** 2 + (free_ys - contact[1]) ** 2
-            nearest = int(distances.argmin())
-            start = (float(free_xs[nearest]), float(free_ys[nearest]))
-            heading = np.array([start[0] - contact[0], start[1] - contact[1]])
-            norm = float(np.linalg.norm(heading))
-            if norm < 1e-6:
-                continue
-            result = _trace_curve(bridged, attachment, start, heading / norm, node_index)
+            start, heading = seed
+            result = _trace_curve(bridged, attachment, start, heading, node_index)
             if result is None:
                 continue
             reached, arrival = result
-            other = _contact_points(component, attachment, reached)
+            other = _contact_points(component, attachment, reached, nodes[reached])
             far = min(other, key=lambda p: (p[0] - arrival[0]) ** 2 + (p[1] - arrival[1]) ** 2) if other else None
             if far is None:
                 continue
